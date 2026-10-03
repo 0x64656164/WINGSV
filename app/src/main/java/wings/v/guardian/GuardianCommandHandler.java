@@ -159,15 +159,23 @@ public final class GuardianCommandHandler {
         return GuardianProto.Frame.newBuilder().setStateReport(report).build();
     }
 
-    public static void applyConfigPush(Context context, GuardianProto.ConfigPush push) {
-        Context ctx = context.getApplicationContext();
-        if (push == null || push.getConfig() == null) return;
+    Context ctx = context.getApplicationContext();
+        ProxyTunnelService.writeRuntimeLogLine(
+            "[guardian] applyConfigPush: entered, push=" + (push != null)
+            + " config=" + (push != null && push.getConfig() != null));
+        if (push == null || push.getConfig() == null) {
+            return;
+        }
+        ProxyTunnelService.writeRuntimeLogLine(
+            "[guardian] applyConfigPush: ver=" + push.getConfig().getVer()
+            + " type=" + push.getConfig().getType()
+            + " backend=" + push.getConfig().getBackend()
+            + " mergeXray=" + (push.getConfig().hasXray() && push.getConfig().getXray().getMergeOnly())
+            + " mergeTurn=" + (push.getConfig().hasTurn() && push.getConfig().getTurn().getMergeOnly()));
         try {
             wings.v.core.WingsImportParser.ImportedConfig imported = wings.v.core.WingsImportParser.parseProtoConfig(
                 push.getConfig()
             );
-            // Strip Guardian credentials but keep sync_mode/interval - those
-            // are panel-driven behavioural knobs and must propagate live.
             imported.guardianWsUrl = null;
             imported.guardianClientId = null;
             imported.guardianClientToken = null;
@@ -177,8 +185,20 @@ public final class GuardianCommandHandler {
             if (version > 0) {
                 AppPrefs.setGuardianLastAppliedConfigVersion(ctx, version);
             }
+            ProxyTunnelService.writeRuntimeLogLine(
+                "[guardian] applyConfigPush: OK, backend=" + imported.backendType
+                + " hasAll=" + imported.hasAllSettings
+                + " hasTurn=" + imported.hasTurnSettings
+                + " hasWg=" + imported.hasWireGuardSettings
+                + " hasAmnezia=" + imported.hasAmneziaSettings
+                + " hasXray=" + imported.hasXraySettings
+                + " hasAppRouting=" + imported.hasAppRouting
+                + " hasXrayRouting=" + imported.hasXrayRouting);
         } catch (Exception error) {
             Log.w(TAG, "config push apply failed: " + error.getMessage());
+            ProxyTunnelService.writeRuntimeLogLine(
+                "[guardian] applyConfigPush FAILED: " + error.getClass().getSimpleName()
+                + ": " + error.getMessage());
         }
     }
 }

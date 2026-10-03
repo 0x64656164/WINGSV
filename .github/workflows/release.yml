@@ -26,7 +26,6 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
-          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -257,38 +256,16 @@ jobs:
             echo "__LOG_EOF__"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Generate release notes via Claude
-        id: claude-notes
-        continue-on-error: true
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
-            Сгенерируй release notes для версии ${{ steps.resolve-version.outputs.version }} на русском языке в формате Markdown.
-
-            Коммиты с прошлого релиза (${{ steps.commit-log.outputs.prev_tag }}) до текущего:
-            ```
-            ${{ steps.commit-log.outputs.log }}
-            ```
-
-            Правила:
-            - Используй ровно 4 категории: «Добавлено», «Исправлено», «Изменено», «Удалено».
-            - Если категория пустая — не выводи её заголовок.
-            - Каждый пункт — короткое пользовательское описание (не разработческое), 1 строка.
-            - Игнорируй коммиты с тегом `[ignore]:`.
-            - Связанные коммиты (например, порт фичи + bump подмодуля) объединяй в один пункт.
-            - Не добавляй вводный текст, дату, версию, footer — только заголовки категорий и буллеты.
-            - Запиши итог в файл `release-notes.md` в корне репозитория.
-
-      - name: Fallback release notes
-        if: steps.claude-notes.outcome != 'success' || hashFiles('release-notes.md') == ''
+      - name: Generate release notes from commit log
         shell: bash
         run: |
           set -euo pipefail
           {
             echo "### Изменения"
             echo ""
-            echo "${{ steps.commit-log.outputs.log }}" | grep -v '^[0-9a-f]\+ \[ignore\]:' | sed 's/^[0-9a-f]\+ /- /'
+            echo "${{ steps.commit-log.outputs.log }}" \
+              | grep -v '^[0-9a-f]\+ \[ignore\]:' \
+              | sed 's/^[0-9a-f]\+ /- /'
           } > release-notes.md
 
       - name: Publish GitHub release APK

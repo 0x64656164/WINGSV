@@ -31,7 +31,6 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
-          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4

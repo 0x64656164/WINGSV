@@ -270,7 +270,7 @@
     <string name="about_telegram_chat_summary">Обсуждение, предложения и помощь с настройкой</string>
     <string name="about_special_thanks_section">Special thanks to</string>
     <string name="about_source_code_title">Исходный код</string>
-    <string name="about_source_code_summary">github.com/WINGS-N/WINGSV</string>
+    <string name="about_source_code_summary">github.com/0x64656164/WINGSV</string>
     <string name="about_licenses_title">Лицензии свободного ПО</string>
     <string name="about_licenses_summary">Основные open-source компоненты приложения</string>
     <string name="about_dev_wings_n_title">WINGS-N</string>

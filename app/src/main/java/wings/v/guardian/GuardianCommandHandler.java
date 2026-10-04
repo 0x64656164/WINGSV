@@ -159,7 +159,8 @@ public final class GuardianCommandHandler {
         return GuardianProto.Frame.newBuilder().setStateReport(report).build();
     }
 
-    Context ctx = context.getApplicationContext();
+    public static void applyConfigPush(Context context, GuardianProto.ConfigPush push) {
+        Context ctx = context.getApplicationContext();
         ProxyTunnelService.writeRuntimeLogLine(
             "[guardian] applyConfigPush: entered, push=" + (push != null)
             + " config=" + (push != null && push.getConfig() != null));

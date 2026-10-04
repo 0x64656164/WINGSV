@@ -176,8 +176,16 @@ jobs:
             .gradle/libxray/go-bin
           key: ${{ runner.os }}-libxray-go-${{ hashFiles('external/libXray/go.mod', 'external/libXray/go.sum', 'external/libXray/build/**/*.py', 'external/Xray-core/go.mod', 'external/Xray-core/go.sum') }}-${{ github.run_id }}
 
-      - name: Upload debug APK
+      - name: Upload debug APK (arm64)
         uses: actions/upload-artifact@v6
         with:
-          name: app-debug-${{ steps.resolve-version.outputs.version }}
-          path: app/build/outputs/apk/debug/**/*.apk
+          name: app-debug-arm64-${{ steps.resolve-version.outputs.version }}
+          path: app/build/outputs/apk/arm64/debug/app-arm64-debug.apk
+          if-no-files-found: error
+
+      - name: Upload debug APK (arm32)
+        uses: actions/upload-artifact@v6
+        with:
+          name: app-debug-arm32-${{ steps.resolve-version.outputs.version }}
+          path: app/build/outputs/apk/arm32/debug/app-arm32-debug.apk
+          if-no-files-found: error

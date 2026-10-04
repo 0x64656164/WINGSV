@@ -540,17 +540,93 @@ public final class ActiveProbingManager {
             if (isUsablePhysicalNetwork(connectivityManager, activeNetwork)) {
                 return activeNetwork;
             }
+            Network underlyingNetwork = findVpnUnderlyingNetwork(connectivityManager, activeNetwork);
+            if (underlyingNetwork != null) {
+                return underlyingNetwork;
+            }
             Network[] networks = connectivityManager.getAllNetworks();
-            if (networks == null) {
+            return selectPreferredNetwork(connectivityManager, networks);
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    @Nullable
+    private static Network findVpnUnderlyingNetwork(
+        @Nullable ConnectivityManager connectivityManager,
+        @Nullable Network activeNetwork
+    ) {
+        if (connectivityManager == null || activeNetwork == null) {
+            return null;
+        }
+        try {
+            NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(activeNetwork);
+            if (capabilities == null || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
                 return null;
             }
-            for (Network network : networks) {
-                if (isUsablePhysicalNetwork(connectivityManager, network)) {
-                    return network;
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+                return null;
+            }
+            List<Network> underlyingNetworks = capabilities.getUnderlyingNetworks();
+            if (underlyingNetworks == null) {
+                return null;
+            }
+            return selectPreferredNetwork(connectivityManager, underlyingNetworks.toArray(new Network[0]));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    @Nullable
+    private static Network selectPreferredNetwork(
+        @Nullable ConnectivityManager connectivityManager,
+        @Nullable Network[] candidates
+    ) {
+        if (connectivityManager == null || candidates == null) {
+            return null;
+        }
+        Network best = null;
+        int bestRank = Integer.MAX_VALUE;
+        try {
+            for (Network network : candidates) {
+                if (network == null) {
+                    continue;
+                }
+                NetworkCapabilities capabilities;
+                try {
+                    capabilities = connectivityManager.getNetworkCapabilities(network);
+                } catch (Exception ignored) {
+                    continue;
+                }
+                if (!isUsablePhysicalNetwork(capabilities)) {
+                    continue;
+                }
+                int rank = transportRank(capabilities);
+                if (rank < bestRank) {
+                    best = network;
+                    bestRank = rank;
+                    if (bestRank == 0) {
+                        break;
+                    }
                 }
             }
         } catch (Exception ignored) {}
-        return null;
+        return best;
+    }
+
+    private static int transportRank(@Nullable NetworkCapabilities capabilities) {
+        if (capabilities == null) {
+            return Integer.MAX_VALUE;
+        }
+        if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+            return 0;
+        }
+        if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+            return 1;
+        }
+        if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) {
+            return 2;
+        }
+        return 3;
     }
 
     private static boolean isUsablePhysicalNetwork(
@@ -561,27 +637,31 @@ public final class ActiveProbingManager {
             return false;
         }
         try {
-            NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(network);
-            if (capabilities == null || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
-                return false;
-            }
-            boolean physicalTransport =
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET);
-            if (!physicalTransport || !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
-                return false;
-            }
-            if (
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-                !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
-            ) {
-                return false;
-            }
-            return true;
+            return isUsablePhysicalNetwork(connectivityManager.getNetworkCapabilities(network));
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    private static boolean isUsablePhysicalNetwork(@Nullable NetworkCapabilities capabilities) {
+        if (capabilities == null || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+            return false;
+        }
+        boolean physicalTransport =
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH);
+        if (!physicalTransport || !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+            return false;
+        }
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
+        ) {
+            return false;
+        }
+        return true;
     }
 
     @NonNull
@@ -679,6 +759,9 @@ public final class ActiveProbingManager {
             }
             if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
                 return "ethernet";
+            }
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) {
+                return "bt";
             }
             return "other";
         } catch (Exception ignored) {

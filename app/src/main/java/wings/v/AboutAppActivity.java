@@ -286,7 +286,7 @@ public class AboutAppActivity extends AppCompatActivity {
 
         binding.cardSourceCode.setOnClickListener(view -> {
             Haptics.softSelection(view);
-            BrowserLauncher.open(this, "https://github.com/WINGS-N/WINGSV");
+            BrowserLauncher.open(this, "https://github.com/0x64656164/WINGSV");
         });
         binding.cardOpenSourceLicenses.setOnClickListener(view -> {
             Haptics.softSelection(view);

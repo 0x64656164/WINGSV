@@ -60,7 +60,7 @@ public final class AppUpdateManager {
     private static final String TAG = "AppUpdateManager";
     private static final int TIRAMISU_API = 33;
     private static final String CACHE_PREFS_NAME = "app_update_cache";
-    private static final String RELEASES_URL = "https://api.github.com/repos/WINGS-N/WINGSV/releases?per_page=4";
+    private static final String RELEASES_URL = "https://api.github.com/repos/0x64656164/WINGSV/releases?per_page=4";
     private static final String RELEASES_URL_OVERRIDE_PROP = "debug.wingsv.releases_url";
     private static final String APK_MIME_TYPE = "application/vnd.android.package-archive";
     // Releases carry one APK per ABI because the two build against different MMKV

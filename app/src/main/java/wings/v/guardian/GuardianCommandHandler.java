@@ -168,7 +168,7 @@ public final class GuardianCommandHandler {
             return;
         }
     
-        GuardianProto.Config cfg = push.getConfig();
+        var cfg = push.getConfig();
         if (cfg.getVer() <= 0) {
             cfg = cfg.toBuilder().setVer(1).build();
             ProxyTunnelService.writeRuntimeLogLine(

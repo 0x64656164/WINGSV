@@ -167,16 +167,24 @@ public final class GuardianCommandHandler {
         if (push == null || push.getConfig() == null) {
             return;
         }
+    
+        GuardianProto.Config cfg = push.getConfig();
+        if (cfg.getVer() <= 0) {
+            cfg = cfg.toBuilder().setVer(1).build();
+            ProxyTunnelService.writeRuntimeLogLine(
+                "[guardian] applyConfigPush: ver=0 from panel, forcing ver=1 fallback");
+        }
+    
         ProxyTunnelService.writeRuntimeLogLine(
-            "[guardian] applyConfigPush: ver=" + push.getConfig().getVer()
-            + " type=" + push.getConfig().getType()
-            + " backend=" + push.getConfig().getBackend()
-            + " mergeXray=" + (push.getConfig().hasXray() && push.getConfig().getXray().getMergeOnly())
-            + " mergeTurn=" + (push.getConfig().hasTurn() && push.getConfig().getTurn().getMergeOnly()));
+            "[guardian] applyConfigPush: ver=" + cfg.getVer()
+            + " type=" + cfg.getType()
+            + " backend=" + cfg.getBackend()
+            + " mergeXray=" + (cfg.hasXray() && cfg.getXray().getMergeOnly())
+            + " mergeTurn=" + (cfg.hasTurn() && cfg.getTurn().getMergeOnly()));
+    
         try {
-            wings.v.core.WingsImportParser.ImportedConfig imported = wings.v.core.WingsImportParser.parseProtoConfig(
-                push.getConfig()
-            );
+            wings.v.core.WingsImportParser.ImportedConfig imported =
+                wings.v.core.WingsImportParser.parseProtoConfig(cfg);
             imported.guardianWsUrl = null;
             imported.guardianClientId = null;
             imported.guardianClientToken = null;

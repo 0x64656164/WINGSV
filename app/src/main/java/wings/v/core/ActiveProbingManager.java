@@ -540,40 +540,10 @@ public final class ActiveProbingManager {
             if (isUsablePhysicalNetwork(connectivityManager, activeNetwork)) {
                 return activeNetwork;
             }
-            Network underlyingNetwork = findVpnUnderlyingNetwork(connectivityManager, activeNetwork);
-            if (underlyingNetwork != null) {
-                return underlyingNetwork;
-            }
             Network[] networks = connectivityManager.getAllNetworks();
             return selectPreferredNetwork(connectivityManager, networks);
         } catch (Exception ignored) {}
         return null;
-    }
-
-    @Nullable
-    private static Network findVpnUnderlyingNetwork(
-        @Nullable ConnectivityManager connectivityManager,
-        @Nullable Network activeNetwork
-    ) {
-        if (connectivityManager == null || activeNetwork == null) {
-            return null;
-        }
-        try {
-            NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(activeNetwork);
-            if (capabilities == null || !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
-                return null;
-            }
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-                return null;
-            }
-            List<Network> underlyingNetworks = capabilities.getUnderlyingNetworks();
-            if (underlyingNetworks == null) {
-                return null;
-            }
-            return selectPreferredNetwork(connectivityManager, underlyingNetworks.toArray(new Network[0]));
-        } catch (Exception ignored) {
-            return null;
-        }
     }
 
     @Nullable

@@ -9,6 +9,7 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.os.Build;
+import android.os.SystemClock;
 import android.text.TextUtils;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -27,19 +28,18 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import wings.v.ActiveProbingSettingsActivity;
 import wings.v.R;
+import wings.v.service.ProxyTunnelService;
 
-@SuppressWarnings(
-    {
-        "PMD.DoNotUseThreads",
-        "PMD.AvoidCatchingGenericException",
-        "PMD.CommentRequired",
-        "PMD.LawOfDemeter",
-        "PMD.MethodArgumentCouldBeFinal",
-        "PMD.LocalVariableCouldBeFinal",
-        "PMD.LongVariable",
-        "PMD.OnlyOneReturn",
-    }
-)
+@SuppressWarnings({
+    "PMD.DoNotUseThreads",
+    "PMD.AvoidCatchingGenericException",
+    "PMD.CommentRequired",
+    "PMD.LawOfDemeter",
+    "PMD.MethodArgumentCouldBeFinal",
+    "PMD.LocalVariableCouldBeFinal",
+    "PMD.LongVariable",
+    "PMD.OnlyOneReturn",
+})
 public final class ActiveProbingManager {
 
     public static final String KEY_OPEN_SETTINGS = "pref_open_active_probing_settings";
@@ -86,12 +86,20 @@ public final class ActiveProbingManager {
         public final int totalCount;
         public final int reachableCount;
         public final List<String> failedTargets;
+        public final List<ProbeDetail> details;
 
-        ProbeResult(boolean hasUsablePhysicalNetwork, int totalCount, int reachableCount, List<String> failedTargets) {
+        ProbeResult(
+            boolean hasUsablePhysicalNetwork,
+            int totalCount,
+            int reachableCount,
+            List<String> failedTargets,
+            List<ProbeDetail> details
+        ) {
             this.hasUsablePhysicalNetwork = hasUsablePhysicalNetwork;
             this.totalCount = Math.max(totalCount, 0);
             this.reachableCount = Math.max(reachableCount, 0);
             this.failedTargets = failedTargets != null ? new ArrayList<>(failedTargets) : new ArrayList<>();
+            this.details = details != null ? new ArrayList<>(details) : new ArrayList<>();
         }
 
         public boolean shouldFallback() {
@@ -135,6 +143,41 @@ public final class ActiveProbingManager {
         }
     }
 
+    public static final class ProbeDetail {
+
+        public final String url;
+        public final String host;
+        public final String transport;
+        public final long elapsedMs;
+        public final boolean ok;
+        public final String reason;
+
+        ProbeDetail(String url, String host, String transport, long elapsedMs, boolean ok, String reason) {
+            this.url = url != null ? url : "";
+            this.host = !TextUtils.isEmpty(host) ? host : this.url;
+            this.transport = !TextUtils.isEmpty(transport) ? transport : "unknown";
+            this.elapsedMs = Math.max(0L, elapsedMs);
+            this.ok = ok;
+            this.reason = !TextUtils.isEmpty(reason) ? reason : "exception-unknown";
+        }
+
+        @NonNull
+        public String formatLogLine() {
+            return (
+                "active-probe host=" +
+                host +
+                " net=" +
+                transport +
+                " protect=no elapsed_ms=" +
+                elapsedMs +
+                " result=" +
+                (ok ? "ok" : "fail") +
+                " reason=" +
+                reason
+            );
+        }
+    }
+
     public static Settings getSettings(@Nullable Context context) {
         Settings settings = new Settings();
         if (context == null) {
@@ -168,7 +211,7 @@ public final class ActiveProbingManager {
             return false;
         }
         BackendType backendType = XrayStore.getBackendType(context);
-        return (backendType != null && (backendType.usesXrayCore() || backendType.isPlainBackend()));
+        return backendType != null && (backendType.usesXrayCore() || backendType.isPlainBackend());
     }
 
     @NonNull
@@ -289,36 +332,72 @@ public final class ActiveProbingManager {
         List<String> urls =
             resolvedSettings.urls != null ? new ArrayList<>(resolvedSettings.urls) : defaultUrls(context);
         if (context == null || urls.isEmpty()) {
-            return new ProbeResult(false, urls.size(), 0, urls);
+            return new ProbeResult(false, urls.size(), 0, urls, null);
         }
         Network network = findUsablePhysicalNetwork(context.getApplicationContext());
         if (network == null) {
-            return new ProbeResult(false, urls.size(), 0, urls);
+            return new ProbeResult(false, urls.size(), 0, urls, null);
         }
 
         int timeoutMs = (int) Math.max(500L, resolvedSettings.timeoutMs());
+        String transport = transportLabel(context.getApplicationContext(), network);
         int successCount = 0;
         ArrayList<String> failedTargets = new ArrayList<>();
+        ArrayList<ProbeDetail> details = new ArrayList<>();
         try (ExecutorScope executorScope = new ExecutorScope(Math.max(1, Math.min(urls.size(), 4)))) {
-            ArrayList<Future<Boolean>> futures = new ArrayList<>();
+            ArrayList<Future<ProbeDetail>> futures = new ArrayList<>();
             for (String url : urls) {
-                futures.add(executorScope.executor.submit(new ProbeTask(network, url, timeoutMs)));
+                futures.add(
+                    executorScope.executor.submit(new ProbeTask(network, url, hostOf(url), transport, timeoutMs))
+                );
             }
             for (int index = 0; index < urls.size(); index++) {
-                boolean success;
+                ProbeDetail detail;
                 try {
-                    success = futures.get(index).get(timeoutMs + 750L, TimeUnit.MILLISECONDS);
-                } catch (ExecutionException | InterruptedException | java.util.concurrent.TimeoutException ignored) {
-                    success = false;
+                    detail = futures.get(index).get(timeoutMs + 750L, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException ignored) {
+                    detail = new ProbeDetail(
+                        urls.get(index),
+                        hostOf(urls.get(index)),
+                        transport,
+                        0L,
+                        false,
+                        "interrupted"
+                    );
+                } catch (ExecutionException error) {
+                    Throwable cause = error.getCause() != null ? error.getCause() : error;
+                    detail = new ProbeDetail(
+                        urls.get(index),
+                        hostOf(urls.get(index)),
+                        transport,
+                        timeoutMs + 750L,
+                        false,
+                        classifyReason(cause)
+                    );
+                } catch (java.util.concurrent.TimeoutException ignored) {
+                    detail = new ProbeDetail(
+                        urls.get(index),
+                        hostOf(urls.get(index)),
+                        transport,
+                        timeoutMs + 750L,
+                        false,
+                        "timeout"
+                    );
                 }
-                if (success) {
+                details.add(detail);
+                if (detail.ok) {
                     successCount++;
                 } else {
                     failedTargets.add(urls.get(index));
                 }
             }
         }
-        return new ProbeResult(true, urls.size(), successCount, failedTargets);
+        for (ProbeDetail detail : details) {
+            try {
+                ProxyTunnelService.writeRuntimeLogLine(detail.formatLogLine());
+            } catch (Exception ignored) {}
+        }
+        return new ProbeResult(true, urls.size(), successCount, failedTargets, details);
     }
 
     private static final class ExecutorScope implements AutoCloseable {
@@ -580,20 +659,97 @@ public final class ActiveProbingManager {
         return AppPrefs.defaultSharedPreferences(context);
     }
 
-    private static final class ProbeTask implements Callable<Boolean> {
+    @NonNull
+    private static String transportLabel(@Nullable Context context, @Nullable Network network) {
+        if (context == null || network == null) {
+            return "unknown";
+        }
+        try {
+            ConnectivityManager connectivityManager = context.getSystemService(ConnectivityManager.class);
+            NetworkCapabilities capabilities =
+                connectivityManager != null ? connectivityManager.getNetworkCapabilities(network) : null;
+            if (capabilities == null) {
+                return "unknown";
+            }
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                return "wifi";
+            }
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                return "cell";
+            }
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+                return "ethernet";
+            }
+            return "other";
+        } catch (Exception ignored) {
+            return "unknown";
+        }
+    }
+
+    @NonNull
+    private static String hostOf(@Nullable String urlValue) {
+        String value = urlValue != null ? urlValue.trim() : "";
+        int schemeIndex = value.indexOf("://");
+        if (schemeIndex >= 0) {
+            value = value.substring(schemeIndex + 3);
+        }
+        int slashIndex = value.indexOf('/');
+        if (slashIndex >= 0) {
+            value = value.substring(0, slashIndex);
+        }
+        return TextUtils.isEmpty(value) && urlValue != null ? urlValue : value;
+    }
+
+    @NonNull
+    private static String classifyReason(@Nullable Throwable error) {
+        if (error instanceof java.net.SocketTimeoutException) {
+            return "timeout";
+        }
+        if (error instanceof java.net.UnknownHostException || error instanceof java.net.NoRouteToHostException) {
+            return "unreachable";
+        }
+        if (error instanceof java.net.ConnectException) {
+            String message = String.valueOf(error.getMessage()).toLowerCase(Locale.US);
+            if (message.contains("refused")) {
+                return "refused";
+            }
+            if (message.contains("timed out")) {
+                return "timeout";
+            }
+            return "unreachable";
+        }
+        if (error instanceof javax.net.ssl.SSLException) {
+            return "tls-error";
+        }
+        if (error != null) {
+            String message = String.valueOf(error.getMessage());
+            if (message.contains("EPERM") || message.contains("bind")) {
+                return "bind";
+            }
+            return "exception-" + error.getClass().getSimpleName();
+        }
+        return "exception-unknown";
+    }
+
+    private static final class ProbeTask implements Callable<ProbeDetail> {
 
         private final Network network;
         private final String urlValue;
+        private final String host;
+        private final String transport;
         private final int timeoutMs;
 
-        ProbeTask(Network network, String urlValue, int timeoutMs) {
+        ProbeTask(Network network, String urlValue, String host, String transport, int timeoutMs) {
             this.network = network;
             this.urlValue = urlValue;
+            this.host = host;
+            this.transport = transport;
             this.timeoutMs = timeoutMs;
         }
 
         @Override
-        public Boolean call() {
+        public ProbeDetail call() {
+            long startMs = SystemClock.elapsedRealtime();
             HttpURLConnection connection = null;
             try {
                 connection = (HttpURLConnection) network.openConnection(new URL(urlValue));
@@ -603,9 +759,12 @@ public final class ActiveProbingManager {
                 connection.setConnectTimeout(timeoutMs);
                 connection.setReadTimeout(timeoutMs);
                 connection.setRequestProperty("Connection", "close");
-                return connection.getResponseCode() > 0;
-            } catch (Exception ignored) {
-                return false;
+                boolean ok = connection.getResponseCode() > 0;
+                long elapsedMs = SystemClock.elapsedRealtime() - startMs;
+                return new ProbeDetail(urlValue, host, transport, elapsedMs, ok, ok ? "ok" : "bad-status");
+            } catch (Exception error) {
+                long elapsedMs = SystemClock.elapsedRealtime() - startMs;
+                return new ProbeDetail(urlValue, host, transport, elapsedMs, false, classifyReason(error));
             } finally {
                 if (connection != null) {
                     connection.disconnect();

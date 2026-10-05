@@ -2590,6 +2590,12 @@ public final class WingsImportParser {
                     : WingsvProto.WrapKeyDelivery.WRAP_KEY_DELIVERY_OFF
             );
         }
+        // Панель читает это поле обратно из отчёта, поэтому оно обязано уезжать
+        // в снимок - иначе выбор отпечатка виден только на устройстве
+        String browserFingerprint = AppPrefs.normalizeVkTurnBrowserFingerprint(settings.vkTurnBrowserFingerprint);
+        if (!TextUtils.isEmpty(browserFingerprint) && !AppPrefs.VK_TURN_BROWSER_FP_AUTO.equals(browserFingerprint)) {
+            builder.setBrowserFingerprint(browserFingerprint);
+        }
         return builder.build();
     }
 
@@ -2695,12 +2701,6 @@ public final class WingsImportParser {
     }
 
     public static ImportedConfig parseProtoConfig(WingsvProto.Config config) throws Exception {
-        if (config.getVer() <= 0) {
-            throw new IllegalArgumentException(
-                WingsApplication.getStringSafe(R.string.import_parser_version_missing_or_invalid)
-            );
-        }
-
         ImportedConfig importedConfig = new ImportedConfig();
         if (config.getBackend() != WingsvProto.BackendType.BACKEND_TYPE_UNSPECIFIED) {
             BackendType resolvedBackend = BackendType.fromProto(config.getBackend());
@@ -2720,18 +2720,23 @@ public final class WingsImportParser {
             importedConfig.updateBackendType = false;
         }
         parseBackendProfileLists(config, importedConfig);
-        boolean allSettings = config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_ALL;
+        // UNSPECIFIED means "the sender is not telling us a section type", which is
+        // what every panel delta looks like: the panel stores ver/type it got at
+        // create time and never sets them again, so requiring CONFIG_TYPE_ALL
+        // silently dropped app_routing from every push.
+        boolean allSettings =
+            config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_ALL
+                || config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_UNSPECIFIED;
         importedConfig.hasAllSettings = allSettings;
-        boolean handled = allSettings;
 
-        if (allSettings && config.hasAppRouting()) {
+        // Read every section the delta actually carries, whatever the declared
+        // type is. Targeting a single section type below only decides how the
+        // backend is inferred; it must not decide which sections are read.
+        if (config.hasAppRouting()) {
             parseAppRouting(config.getAppRouting(), importedConfig);
         }
         if (config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_APP_ROUTING) {
             importedConfig.updateBackendType = false;
-            if (config.hasAppRouting()) {
-                parseAppRouting(config.getAppRouting(), importedConfig);
-            }
             return importedConfig;
         }
         if (config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_XRAY_ROUTING) {
@@ -2789,7 +2794,7 @@ public final class WingsImportParser {
             if (config.hasTurn() && (allSettings || config.getTurn().getProfilesCount() == 0)) {
                 parseTurn(config.getTurn(), importedConfig);
             }
-            handled = true;
+
             if (!allSettings) {
                 return importedConfig;
             }
@@ -2811,7 +2816,7 @@ public final class WingsImportParser {
                     importedConfig.importedAmneziaTitle = value(config.getAwg().getTitle());
                 }
             }
-            handled = true;
+
             if (!allSettings) {
                 return importedConfig;
             }
@@ -2844,7 +2849,7 @@ public final class WingsImportParser {
             if (config.hasWg() && (allSettings || config.getWg().getProfilesCount() == 0)) {
                 parseWireGuard(config.getWg(), importedConfig);
             }
-            handled = true;
+
             if (!allSettings) {
                 return importedConfig;
             }
@@ -2867,7 +2872,7 @@ public final class WingsImportParser {
             if (config.hasWg() && (allSettings || config.getWg().getProfilesCount() == 0)) {
                 parseWireGuard(config.getWg(), importedConfig);
             }
-            handled = true;
+
         }
 
         if (allSettings || config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_XPOSED || config.hasXposed()) {
@@ -2877,20 +2882,20 @@ public final class WingsImportParser {
             if (!allSettings && config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_XPOSED) {
                 importedConfig.updateBackendType = false;
             }
-            handled = true;
+
         }
 
         if (allSettings || config.hasRoot()) {
             if (config.hasRoot()) {
                 parseRootSettings(config.getRoot(), importedConfig);
             }
-            handled = true;
+
         }
         if (allSettings || config.hasAppPreferences()) {
             if (config.hasAppPreferences()) {
                 parseAppPreferences(config.getAppPreferences(), importedConfig);
             }
-            handled = true;
+
         }
         if (allSettings || config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_GUARDIAN || config.hasGuardian()) {
             if (config.hasGuardian()) {
@@ -2899,30 +2904,30 @@ public final class WingsImportParser {
             if (!allSettings && config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_GUARDIAN) {
                 importedConfig.updateBackendType = false;
             }
-            handled = true;
+
         }
         if (allSettings || config.hasSubscriptionHwid()) {
             if (config.hasSubscriptionHwid()) {
                 parseSubscriptionHwid(config.getSubscriptionHwid(), importedConfig);
             }
-            handled = true;
+
         }
         if (allSettings || config.hasSharing()) {
             if (config.hasSharing()) {
                 parseSharing(config.getSharing(), importedConfig);
             }
-            handled = true;
+
         }
         if (allSettings || config.hasByeDpi()) {
             if (config.hasByeDpi()) {
                 parseByeDpi(config.getByeDpi(), importedConfig);
             }
-            handled = true;
+
         }
 
-        if (!handled) {
-            throw new IllegalArgumentException(WingsApplication.getStringSafe(R.string.import_parser_unsupported_type));
-        }
+        // Nothing to apply is not an error: an empty delta (or one whose sections this
+        // build does not model) is a no-op, and refusing it made the panel retry
+        // the same push forever while the client logged a parse error each time.
         return importedConfig;
     }
 
@@ -2950,7 +2955,9 @@ public final class WingsImportParser {
         if (!TextUtils.isEmpty(value(turn.getTitle()))) {
             importedConfig.importedVkTurnTitle = value(turn.getTitle());
         }
-        importedConfig.endpoint = turn.hasEndpoint() ? formatEndpoint(turn.getEndpoint()) : "";
+        // null, а не "": дельта раздела turn без адреса не должна затирать адрес,
+        // который уже стоит - иначе ProxySettings начинает требовать endpoint
+        importedConfig.endpoint = turn.hasEndpoint() ? formatEndpoint(turn.getEndpoint()) : null;
         importedConfig.link = value(turn.getLink());
         importedConfig.links = new java.util.ArrayList<>();
         for (String entry : turn.getLinksList()) {
@@ -2978,9 +2985,9 @@ public final class WingsImportParser {
         if (turn.getSessionMode() != WingsvProto.TurnSessionMode.TURN_SESSION_MODE_UNSPECIFIED) {
             importedConfig.turnSessionMode = fromProtoSessionMode(turn.getSessionMode());
         }
-        importedConfig.localEndpoint = turn.hasLocalEndpoint() ? formatEndpoint(turn.getLocalEndpoint()) : "";
+        importedConfig.localEndpoint = turn.hasLocalEndpoint() ? formatEndpoint(turn.getLocalEndpoint()) : null;
         importedConfig.turnHost = value(turn.getHost());
-        importedConfig.turnPort = turn.hasPort() ? String.valueOf(turn.getPort()) : "";
+        importedConfig.turnPort = turn.hasPort() ? String.valueOf(turn.getPort()) : null;
         if (turn.hasManualCaptcha()) {
             importedConfig.manualCaptcha = turn.getManualCaptcha();
         }
@@ -2990,6 +2997,12 @@ public final class WingsImportParser {
         }
         if (turn.hasRestartOnNetworkChange()) {
             importedConfig.vkTurnRestartOnNetworkChange = turn.getRestartOnNetworkChange();
+        }
+        // Поле не optional, поэтому присутствия в протобуфе нет: пустое значение
+        // трактуем как "панель его не присылала" и оставляем устройство на своём
+        String fingerprint = value(turn.getBrowserFingerprint());
+        if (!TextUtils.isEmpty(fingerprint)) {
+            importedConfig.vkTurnBrowserFingerprint = fingerprint;
         }
         if (turn.getRuntimeMode() != WingsvProto.ProxyRuntimeMode.PROXY_RUNTIME_MODE_UNSPECIFIED) {
             importedConfig.vkTurnRuntimeMode = fromProtoRuntimeMode(turn.getRuntimeMode());
@@ -3102,12 +3115,15 @@ public final class WingsImportParser {
         if (!TextUtils.isEmpty(value(wg.getTitle()))) {
             importedConfig.importedWireGuardTitle = value(wg.getTitle());
         }
-        importedConfig.wgEndpoint = wg.hasEndpoint() ? formatEndpoint(wg.getEndpoint()) : "";
+        // null, а не "": отсутствие поля в дельте не должно означать "очистить".
+// Иначе панель, не присылающая wg-ключи, затирала их у клиента пустыми
+        // строками и приложение начинало требовать WG-параметры
+        importedConfig.wgEndpoint = wg.hasEndpoint() ? formatEndpoint(wg.getEndpoint()) : null;
         if (wg.hasIface()) {
             WingsvProto.Interface iface = wg.getIface();
             importedConfig.wgPrivateKey = !iface.getPrivateKey().isEmpty()
                 ? encodeWireGuardKey(iface.getPrivateKey().toByteArray())
-                : "";
+                : null;
             if (iface.getAddrsCount() > 0) {
                 importedConfig.wgAddresses = TextUtils.join(", ", iface.getAddrsList());
             }
@@ -3122,10 +3138,10 @@ public final class WingsImportParser {
             WingsvProto.Peer peer = wg.getPeer();
             importedConfig.wgPublicKey = !peer.getPublicKey().isEmpty()
                 ? encodeWireGuardKey(peer.getPublicKey().toByteArray())
-                : "";
+                : null;
             importedConfig.wgPresharedKey = !peer.getPresharedKey().isEmpty()
                 ? encodeWireGuardKey(peer.getPresharedKey().toByteArray())
-                : "";
+                : null;
             if (peer.getAllowedIpsCount() > 0) {
                 List<String> cidrs = new ArrayList<>(peer.getAllowedIpsCount());
                 for (WingsvProto.Cidr cidr : peer.getAllowedIpsList()) {
@@ -4137,6 +4153,7 @@ public final class WingsImportParser {
         public String vkTurnWrapCipher;
         public String vkTurnWrapKeyHex;
         public Boolean vkTurnWrapSendKey;
+        public String vkTurnBrowserFingerprint;
         public ProxyRuntimeMode xrayRuntimeMode;
         public String turnSessionMode;
         public String localEndpoint;

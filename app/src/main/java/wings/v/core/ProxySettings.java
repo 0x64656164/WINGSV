@@ -53,6 +53,8 @@ public class ProxySettings {
     public String vkTurnWrapKeyHex = "";
     /** Transmit wrap key in-band via mu/v1 SessionHello (default true). */
     public boolean vkTurnWrapSendKey = true;
+    /** Семейство браузерного отпечатка для HTTP+TLS-имитации relay'ем. */
+    public String vkTurnBrowserFingerprint = AppPrefs.VK_TURN_BROWSER_FP_SAFARI;
     public String turnSessionMode;
     public String localEndpoint;
     public String turnHost;

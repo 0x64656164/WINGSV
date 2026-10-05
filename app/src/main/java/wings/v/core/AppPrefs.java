@@ -207,7 +207,12 @@ public final class AppPrefs {
     public static final String KEY_APP_ROUTING_RECOMMENDED_DISMISSED = "pref_app_routing_recommended_dismissed";
     // Apps whose traffic is diverted through the standalone ByeDPI SOCKS
     // outbound (DPI bypass), independent of the app-routing mode above.
+    // Ключ общий, без бэкенда: divert живёт только в конфиге xray-core, поэтому
+    // список хранится на каждый бэкенд отдельно, а этот ключ служит значением
+    // по умолчанию для них и миграционной точкой для существующих установок.
     public static final String KEY_BYEDPI_PACKAGES = "pref_byedpi_packages";
+    private static final String KEY_BYEDPI_PACKAGES_XRAY = "pref_byedpi_packages_xray";
+    private static final String KEY_BYEDPI_PACKAGES_MIGRATED = "pref_byedpi_packages_per_backend_migrated";
     public static final String KEY_ROOT_MODE = "pref_root_mode";
     public static final String KEY_KERNEL_WIREGUARD = "pref_kernel_wireguard";
     public static final String KEY_XRAY_TPROXY_MODE = "pref_xray_tproxy_mode";
@@ -1437,7 +1442,8 @@ public final class AppPrefs {
      * Whitelist / XBypass selection. Own package is never included.
      */
     public static Set<String> getByeDpiAppPackages(Context context) {
-        Set<String> stored = prefs(context).getStringSet(KEY_BYEDPI_PACKAGES, null);
+        migrateByeDpiPackages(context);
+        Set<String> stored = prefs(context).getStringSet(byeDpiPackagesKey(context), null);
         if (stored == null || stored.isEmpty()) {
             return new LinkedHashSet<>();
         }
@@ -1464,7 +1470,37 @@ public final class AppPrefs {
         } else {
             packages.remove(packageName);
         }
-        prefs(context).edit().putStringSet(KEY_BYEDPI_PACKAGES, new LinkedHashSet<>(packages)).commit();
+        prefs(context)
+            .edit()
+            .putStringSet(byeDpiPackagesKey(context), new LinkedHashSet<>(packages))
+            .commit();
+    }
+
+    // The ByeDPI divert is emitted into the xray-core config only, so the
+    // per-backend list exists for XRAY and the shared key doubles as the
+    // default for every other backend. Reading a list for a backend that never
+    // had one must not silently inherit another backend's apps, hence the key
+    // split rather than a single global set.
+    private static String byeDpiPackagesKey(Context context) {
+        return XrayStore.getBackendType(context) == BackendType.XRAY ? KEY_BYEDPI_PACKAGES_XRAY : KEY_BYEDPI_PACKAGES;
+    }
+
+    // One-time migration of installs that configured the list while it was
+    // global: seed the XRAY key from the shared key so existing users keep
+    // their apps instead of silently losing the divert on upgrade.
+    private static void migrateByeDpiPackages(Context context) {
+        if (prefs(context).getBoolean(KEY_BYEDPI_PACKAGES_MIGRATED, false)) {
+            return;
+        }
+        SharedPreferences.Editor editor = prefs(context).edit();
+        editor.putBoolean(KEY_BYEDPI_PACKAGES_MIGRATED, true);
+        if (!prefs(context).contains(KEY_BYEDPI_PACKAGES_XRAY)) {
+            Set<String> legacy = prefs(context).getStringSet(KEY_BYEDPI_PACKAGES, null);
+            if (legacy != null && !legacy.isEmpty()) {
+                editor.putStringSet(KEY_BYEDPI_PACKAGES_XRAY, new LinkedHashSet<>(legacy));
+            }
+        }
+        editor.commit();
     }
 
     public static Set<String> getAppRoutingRecommendedDismissedPackages(Context context) {
@@ -1604,6 +1640,7 @@ public final class AppPrefs {
         settings.vkTurnWrapCipher = normalizeWrapCipher(prefs.getString(KEY_VK_TURN_WRAP_CIPHER, "srtp-aes-gcm"));
         settings.vkTurnWrapKeyHex = trim(prefs.getString(KEY_VK_TURN_WRAP_KEY_HEX, ""));
         settings.vkTurnWrapSendKey = prefs.getBoolean(KEY_VK_TURN_WRAP_SEND_KEY, true);
+        settings.vkTurnBrowserFingerprint = getVkTurnBrowserFingerprint(context);
         settings.turnSessionMode = normalizeTurnSessionMode(
             prefs.getString(KEY_TURN_SESSION_MODE, TURN_SESSION_MODE_MU)
         );
@@ -1883,10 +1920,16 @@ public final class AppPrefs {
         WingsImportParser.ImportedConfig importedConfig,
         BackendType backendType
     ) {
-        if (backendType == BackendType.WIREGUARD && !importedConfig.hasAllSettings) {
-            editor.putString(KEY_WG_ENDPOINT, trim(importedConfig.endpoint));
-        } else {
-            editor.putString(KEY_ENDPOINT, trim(importedConfig.endpoint));
+        // Пишем только то, что реально прислали. Раньше отсутствующее поле
+        // затиралось дефолтом, и правка одного поля раздела VK TURN обнуляла
+        // адрес, из-за чего ProxySettings начинал требовать endpoint
+        if (importedConfig.endpoint != null) {
+            String endpoint = trim(importedConfig.endpoint);
+            if (backendType == BackendType.WIREGUARD && !importedConfig.hasAllSettings) {
+                editor.putString(KEY_WG_ENDPOINT, endpoint);
+            } else {
+                editor.putString(KEY_ENDPOINT, endpoint);
+            }
         }
         String importedLink = trim(importedConfig.link);
         ArrayList<String> importedLinks = new ArrayList<>();
@@ -1919,29 +1962,35 @@ public final class AppPrefs {
         if (!TextUtils.isEmpty(trim(importedConfig.linkSecondary))) {
             editor.putString(KEY_VK_LINK_SECONDARY, trim(importedConfig.linkSecondary));
         }
-        editor.putString(
-            KEY_CREDS_GROUP_SIZE,
-            String.valueOf(
-                importedConfig.credsGroupSize != null && importedConfig.credsGroupSize > 0
-                    ? importedConfig.credsGroupSize
-                    : 12
-            )
-        );
+        if (importedConfig.credsGroupSize != null && importedConfig.credsGroupSize > 0) {
+            editor.putString(KEY_CREDS_GROUP_SIZE, String.valueOf(importedConfig.credsGroupSize));
+        }
         // Threads is a device-local tuning preference; a profile import that omits it
         // (e.g. a panel managed VK TURN link) keeps the user's current value.
         if (importedConfig.threads != null && importedConfig.threads > 0) {
             editor.putString(KEY_THREADS, String.valueOf(importedConfig.threads));
         }
-        editor.putBoolean(KEY_USE_UDP, importedConfig.useUdp == null || importedConfig.useUdp);
-        editor.putBoolean(KEY_NO_OBFUSCATION, importedConfig.noObfuscation != null && importedConfig.noObfuscation);
-        editor.putBoolean(KEY_MANUAL_CAPTCHA, importedConfig.manualCaptcha != null && importedConfig.manualCaptcha);
+        // Булевы пишем только когда панель их прислала. Раньше отсутствие поля
+        // означало "выключить", и дельта раздела молча гасила UDP, обфускацию
+        // и авторестарт при смене сети
+        if (importedConfig.useUdp != null) {
+            editor.putBoolean(KEY_USE_UDP, importedConfig.useUdp);
+        }
+        if (importedConfig.noObfuscation != null) {
+            editor.putBoolean(KEY_NO_OBFUSCATION, importedConfig.noObfuscation);
+        }
+        if (importedConfig.manualCaptcha != null) {
+            editor.putBoolean(KEY_MANUAL_CAPTCHA, importedConfig.manualCaptcha);
+        }
         if (!TextUtils.isEmpty(importedConfig.captchaAutoSolver)) {
             editor.putString(KEY_CAPTCHA_AUTO_SOLVER, normalizeCaptchaAutoSolver(importedConfig.captchaAutoSolver));
         }
-        editor.putBoolean(
-            KEY_VK_TURN_RESTART_ON_NETWORK_CHANGE,
-            importedConfig.vkTurnRestartOnNetworkChange == null || importedConfig.vkTurnRestartOnNetworkChange
-        );
+        if (importedConfig.vkTurnRestartOnNetworkChange != null) {
+            editor.putBoolean(
+                KEY_VK_TURN_RESTART_ON_NETWORK_CHANGE,
+                importedConfig.vkTurnRestartOnNetworkChange
+            );
+        }
         if (importedConfig.vkTurnRuntimeMode != null) {
             editor.putString(KEY_VK_TURN_RUNTIME_MODE, importedConfig.vkTurnRuntimeMode.prefValue);
         }
@@ -1960,15 +2009,31 @@ public final class AppPrefs {
         if (importedConfig.vkTurnWrapSendKey != null) {
             editor.putBoolean(KEY_VK_TURN_WRAP_SEND_KEY, importedConfig.vkTurnWrapSendKey);
         }
-        editor.putString(KEY_TURN_SESSION_MODE, normalizeTurnSessionMode(importedConfig.turnSessionMode));
-        editor.putString(
-            KEY_LOCAL_ENDPOINT,
-            TextUtils.isEmpty(trim(importedConfig.localEndpoint))
-                ? "127.0.0.1:9000"
-                : trim(importedConfig.localEndpoint)
-        );
-        editor.putString(KEY_TURN_HOST, trim(importedConfig.turnHost));
-        editor.putString(KEY_TURN_PORT, trim(importedConfig.turnPort));
+        if (!TextUtils.isEmpty(importedConfig.vkTurnBrowserFingerprint)) {
+            editor.putString(
+                KEY_VK_TURN_BROWSER_FINGERPRINT,
+                normalizeVkTurnBrowserFingerprint(importedConfig.vkTurnBrowserFingerprint)
+            );
+        }
+        if (importedConfig.turnSessionMode != null) {
+            editor.putString(KEY_TURN_SESSION_MODE, normalizeTurnSessionMode(importedConfig.turnSessionMode));
+        }
+        if (importedConfig.localEndpoint != null) {
+            String localEndpoint = trim(importedConfig.localEndpoint);
+            editor.putString(
+                KEY_LOCAL_ENDPOINT,
+                TextUtils.isEmpty(localEndpoint) ? "127.0.0.1:9000" : localEndpoint
+            );
+        }
+        // host в протобуфе без optional, присутствия нет: пустое значение читаем как
+        // "панель не присылала" и оставляем устройство на своём хосте
+        String importedTurnHost = trim(importedConfig.turnHost);
+        if (!TextUtils.isEmpty(importedTurnHost)) {
+            editor.putString(KEY_TURN_HOST, importedTurnHost);
+        }
+        if (importedConfig.turnPort != null) {
+            editor.putString(KEY_TURN_PORT, trim(importedConfig.turnPort));
+        }
     }
 
     private static void applyImportedWireGuardSettings(
@@ -1976,27 +2041,39 @@ public final class AppPrefs {
         WingsImportParser.ImportedConfig importedConfig,
         BackendType backendType
     ) {
+        // Пишем только пришедшее. Панель шлёт клиенту с автовыдачей пустой блок wg,
+        // и без presence этот блок затирал выданные relay'ом ключи и подставлял
+        // 1.1.1.1 / 1280 / 0.0.0.0/0 вместо них
         String wireGuardEndpoint = trim(importedConfig.wgEndpoint);
         if (TextUtils.isEmpty(wireGuardEndpoint) && backendType == BackendType.WIREGUARD) {
             wireGuardEndpoint = trim(importedConfig.endpoint);
         }
-        editor.putString(KEY_WG_ENDPOINT, wireGuardEndpoint);
-        editor.putString(KEY_WG_PRIVATE_KEY, trim(importedConfig.wgPrivateKey));
-        editor.putString(KEY_WG_ADDRESSES, trim(importedConfig.wgAddresses));
-        editor.putString(
-            KEY_WG_DNS,
-            TextUtils.isEmpty(trim(importedConfig.wgDns)) ? "1.1.1.1, 1.0.0.1" : trim(importedConfig.wgDns)
-        );
-        editor.putString(
-            KEY_WG_MTU,
-            String.valueOf(importedConfig.wgMtu != null && importedConfig.wgMtu > 0 ? importedConfig.wgMtu : 1280)
-        );
-        editor.putString(KEY_WG_PUBLIC_KEY, trim(importedConfig.wgPublicKey));
-        editor.putString(KEY_WG_PRESHARED_KEY, trim(importedConfig.wgPresharedKey));
-        editor.putString(
-            KEY_WG_ALLOWED_IPS,
-            TextUtils.isEmpty(trim(importedConfig.wgAllowedIps)) ? "0.0.0.0/0, ::/0" : trim(importedConfig.wgAllowedIps)
-        );
+        if (!TextUtils.isEmpty(wireGuardEndpoint)) {
+            editor.putString(KEY_WG_ENDPOINT, wireGuardEndpoint);
+        }
+        if (!TextUtils.isEmpty(importedConfig.wgPrivateKey)) {
+            editor.putString(KEY_WG_PRIVATE_KEY, trim(importedConfig.wgPrivateKey));
+        }
+        if (!TextUtils.isEmpty(importedConfig.wgAddresses)) {
+            editor.putString(KEY_WG_ADDRESSES, trim(importedConfig.wgAddresses));
+        }
+        String wireGuardDns = trim(importedConfig.wgDns);
+        if (!TextUtils.isEmpty(wireGuardDns)) {
+            editor.putString(KEY_WG_DNS, wireGuardDns);
+        }
+        if (importedConfig.wgMtu != null && importedConfig.wgMtu > 0) {
+            editor.putString(KEY_WG_MTU, String.valueOf(importedConfig.wgMtu));
+        }
+        if (!TextUtils.isEmpty(importedConfig.wgPublicKey)) {
+            editor.putString(KEY_WG_PUBLIC_KEY, trim(importedConfig.wgPublicKey));
+        }
+        if (!TextUtils.isEmpty(importedConfig.wgPresharedKey)) {
+            editor.putString(KEY_WG_PRESHARED_KEY, trim(importedConfig.wgPresharedKey));
+        }
+        String wireGuardAllowedIps = trim(importedConfig.wgAllowedIps);
+        if (!TextUtils.isEmpty(wireGuardAllowedIps)) {
+            editor.putString(KEY_WG_ALLOWED_IPS, wireGuardAllowedIps);
+        }
     }
 
     private static void applyImportedXraySettings(Context context, WingsImportParser.ImportedConfig importedConfig) {

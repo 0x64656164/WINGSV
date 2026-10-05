@@ -96,6 +96,7 @@ import wings.v.MainActivity;
 import wings.v.R;
 import wings.v.VkAuthBrowserActivity;
 import wings.v.byedpi.ByeDpiNative;
+import wings.v.byedpi.ByeDpiRuntimeState;
 import wings.v.core.ActiveProbingBackgroundScheduler;
 import wings.v.core.ActiveProbingManager;
 import wings.v.core.AmneziaConfigFactory;
@@ -2093,9 +2094,24 @@ public class ProxyTunnelService extends Service {
         // critical path. Skipped for the TCP relay flow because the config
         // depends on the relay endpoint we only learn after the relay is
         // up; that path stays sync.
-        final boolean preBuildRelayFlow = !activeXrayTproxyMode && usesXrayExternalTcpRelay(settings);
         final boolean fProxyOnly = activeXrayProxyOnly;
         final boolean fTproxy = activeXrayTproxyMode;
+        ByeDpiSettings byeDpiSettings = settings != null ? settings.byeDpiSettings : null;
+        final boolean xrayExternalRelayEnabled = !activeXrayTproxyMode && usesXrayExternalTcpRelay(settings);
+        final boolean preBuildRelayFlow = xrayExternalRelayEnabled;
+        // Also start the local ByeDPI proxy when the user routed apps through it
+        // per-app (even with the front-proxy toggle off): the standalone
+        // byedpi-app outbound in the xray config dials this same SOCKS server.
+        boolean launchByeDpiFrontProxy =
+            !activeXrayProxyOnly &&
+            byeDpiSettings != null &&
+            (byeDpiSettings.launchOnXrayStart || AppPrefs.hasByeDpiApps(this));
+        // Settle here, before the config is built, whether a front proxy will serve
+        // this session. The pre-build thread below races the proxy start further
+        // down, so observing the process there always reports dead and would drop
+        // the per-app divert from the config. The relay flow deliberately runs
+        // without the proxy further down, so it must not promise one here either.
+        ByeDpiRuntimeState.setFrontProxyActive(launchByeDpiFrontProxy && !xrayExternalRelayEnabled);
         if (fTproxy) {
             // Fresh random free port for this TPROXY session, reused below for the
             // config, iptables rules and the listener-readiness checks.
@@ -2187,15 +2203,6 @@ public class ProxyTunnelService extends Service {
             applySplitTunnelLockdown("Xray VPN", XrayVpnService.findActiveTunInterfaceName());
         }
 
-        ByeDpiSettings byeDpiSettings = settings != null ? settings.byeDpiSettings : null;
-        // Also start the local ByeDPI proxy when the user routed apps through it
-        // per-app (even with the front-proxy toggle off): the standalone
-        // byedpi-app outbound in the xray config dials this same SOCKS server.
-        boolean launchByeDpiFrontProxy =
-            !activeXrayProxyOnly &&
-            byeDpiSettings != null &&
-            (byeDpiSettings.launchOnXrayStart || AppPrefs.hasByeDpiApps(this));
-        boolean xrayExternalRelayEnabled = !activeXrayTproxyMode && usesXrayExternalTcpRelay(settings);
         ParsedLocalEndpoint xrayTcpRelayEndpoint = null;
         if (xrayExternalRelayEnabled) {
             xrayTcpRelayEndpoint = parseLocalEndpoint(settings.localEndpoint);
@@ -2747,6 +2754,7 @@ public class ProxyTunnelService extends Service {
      */
     private void startByeDpiRootProxy(ByeDpiSettings settings, int generation) throws Exception {
         byeDpiFrontProxyActive = true;
+        ByeDpiRuntimeState.setFrontProxyActive(true);
         byeDpiDialHost = settings.resolveRuntimeDialHost();
         byeDpiDialPort = settings.resolveRuntimeListenPort();
         // No protect path: there is no VpnService to protect from here.
@@ -2790,6 +2798,7 @@ public class ProxyTunnelService extends Service {
         }
         byeDpiNative = new ByeDpiNative();
         byeDpiFrontProxyActive = true;
+        ByeDpiRuntimeState.setFrontProxyActive(true);
         byeDpiDialHost = settings.resolveRuntimeDialHost();
         byeDpiDialPort = settings.resolveRuntimeListenPort();
         String byeDpiProtectPath = requireProtect ? protectSocketName : null;
@@ -2950,6 +2959,7 @@ public class ProxyTunnelService extends Service {
 
     private void stopByeDpiFrontProxy() {
         byeDpiFrontProxyActive = false;
+        ByeDpiRuntimeState.setFrontProxyActive(false);
         long daemonChildId = byeDpiDaemonChildId;
         byeDpiDaemonChildId = 0L;
         if (daemonChildId != 0L) {

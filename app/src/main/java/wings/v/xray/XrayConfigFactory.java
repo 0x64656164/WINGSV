@@ -19,6 +19,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import wings.v.R;
 import wings.v.WingsApplication;
+import wings.v.byedpi.ByeDpiRuntimeState;
 import wings.v.core.AppPrefs;
 import wings.v.core.ByeDpiSettings;
 import wings.v.core.ByeDpiStore;
@@ -886,12 +887,14 @@ public final class XrayConfigFactory {
      * the user routed at least one app through ByeDPI. Unlike the byedpi-front
      * transport chain (which wraps the VLESS outbound), this is a terminal
      * outbound: the selected apps egress through ByeDPI directly to the origin,
-     * bypassing the Xray proxy. Gated on AppPrefs.hasByeDpiApps so the outbound
-     * is absent (and the matching routing rule too) when the feature is unused.
+     * bypassing the Xray proxy. Gated on AppPrefs.hasByeDpiApps and on
+     * ByeDpiRuntimeState, so the outbound is absent (and the matching routing rule
+     * too) when the feature is unused or when no front proxy will serve the
+     * session - a config pointing at a dead port silently strands the apps.
      */
     private static void appendByeDpiAppOutbound(JSONArray outbounds, Context context, ByeDpiSettings byeDpiSettings)
         throws Exception {
-        if (context == null || !AppPrefs.hasByeDpiApps(context)) {
+        if (context == null || !AppPrefs.hasByeDpiApps(context) || !ByeDpiRuntimeState.isFrontProxyActive()) {
             return;
         }
         ByeDpiSettings effective = byeDpiSettings != null ? byeDpiSettings : ByeDpiStore.getSettings(context);
@@ -980,7 +983,7 @@ public final class XrayConfigFactory {
         // connections with TUN_BYEDPI_TAG (applyTunUidFilter route_uids); this rule
         // sends that tag to the standalone ByeDPI SOCKS outbound. Gated on the same
         // condition as appendByeDpiAppOutbound so the referenced tag always exists.
-        if (includeTunInbound && AppPrefs.hasByeDpiApps(context)) {
+        if (includeTunInbound && AppPrefs.hasByeDpiApps(context) && ByeDpiRuntimeState.isFrontProxyActive()) {
             JSONObject byeDpiAppRule = new JSONObject();
             byeDpiAppRule.put("type", "field");
             byeDpiAppRule.put("inboundTag", new JSONArray().put(TUN_BYEDPI_TAG));
@@ -1326,6 +1329,11 @@ public final class XrayConfigFactory {
     }
 
     private static void applyByeDpiRouteUids(Context context, JSONObject tunSettings) throws Exception {
+        // Same gate as the outbound and its rule: stamping routeUids with no
+        // matching rule behind the tag would send those UIDs nowhere useful.
+        if (!ByeDpiRuntimeState.isFrontProxyActive()) {
+            return;
+        }
         Set<String> byeDpiPackages = AppPrefs.getByeDpiAppPackages(context);
         if (byeDpiPackages.isEmpty()) {
             return;

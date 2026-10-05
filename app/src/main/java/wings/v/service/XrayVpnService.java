@@ -23,6 +23,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import libXray.DialerController;
 import wings.v.MainActivity;
+import wings.v.byedpi.ByeDpiRuntimeState;
 import wings.v.core.AppPrefs;
 import wings.v.core.AppRoutingMode;
 import wings.v.core.BackendType;
@@ -392,7 +393,12 @@ public class XrayVpnService extends VpnService implements DialerController {
         // ByeDPI per-app routing diverts these apps at the gVisor level, so they
         // must stay INSIDE the VpnService tunnel regardless of the routing mode:
         // whitelist them explicitly, and never disallow them under plain Bypass.
-        Set<String> byeDpiPackages = AppPrefs.getByeDpiAppPackages(this);
+        // Without a live front proxy there is no divert in the config at all, so
+        // the list must read as empty: forcing those apps into the tunnel would
+        // strand them under an empty whitelist and drop them under Bypass.
+        Set<String> byeDpiPackages = ByeDpiRuntimeState.isFrontProxyActive()
+            ? AppPrefs.getByeDpiAppPackages(this)
+            : Collections.emptySet();
         if (packages.isEmpty()) {
             if (mode == AppRoutingMode.WHITELIST) {
                 // An empty whitelist must tunnel NOTHING, not everything. Without an

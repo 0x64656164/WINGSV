@@ -170,9 +170,12 @@ public final class GuardianCommandHandler {
     
         var cfg = push.getConfig();
         if (cfg.getVer() <= 0) {
+            // Шапка от старой панели: ver - это версия формата, а не ревизия, и
+            // разбираем мы конфиг по присутствию полей, так что подставляемое
+            // значение безобидно. Штамповать его должна панель.
             cfg = cfg.toBuilder().setVer(1).build();
             ProxyTunnelService.writeRuntimeLogLine(
-                "[guardian] applyConfigPush: ver=0 from panel, forcing ver=1 fallback");
+                "[guardian] applyConfigPush: panel sent no config schema version, assuming our own");
         }
     
         ProxyTunnelService.writeRuntimeLogLine(
@@ -190,7 +193,10 @@ public final class GuardianCommandHandler {
             imported.guardianClientToken = null;
             imported.guardianClientName = null;
             AppPrefs.applyImportedConfig(ctx, imported);
-            long version = push.getConfig().getConfigVersion();
+            // Ревизию берём из того же cfg, что разобрали: это единственный
+            // экземпляр, за который мы отвечаем, и он уже пересобран с
+            // подставленной версией формата.
+            long version = cfg.getConfigVersion();
             if (version > 0) {
                 AppPrefs.setGuardianLastAppliedConfigVersion(ctx, version);
             }

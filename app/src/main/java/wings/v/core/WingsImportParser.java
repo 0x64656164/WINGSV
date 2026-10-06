@@ -4196,6 +4196,11 @@ public final class WingsImportParser {
         // leaves every other VK TURN setting (endpoint, wrap, backend, profiles)
         // untouched. Set by a links-only wingsv:// share link.
         public boolean turnMergeOnly;
+        // Set only for a panel config push (guardian applyConfigPush), as opposed to a
+        // share-link or manual import. The panel owns the per-backend profile libraries,
+        // so a settings-only push folds the flat keys into the active profile instead of
+        // adding a new device-local one.
+        public boolean panelPush;
         public final List<XrayRoutingRule> xrayRoutingRules = new ArrayList<>();
         public String xrayRoutingGeoipUrl;
         public String xrayRoutingGeositeUrl;

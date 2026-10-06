@@ -1812,6 +1812,9 @@ public final class AppPrefs {
     // each store's importActiveFromFlatPrefs reads them into a profile, dedups,
     // sets it active and re-projects it back onto the flat keys (runtime path
     // unchanged). WB stream backends and the anonymous/Xray flows are untouched.
+    // Exception: a panel push (panelPush) folds the flat keys into the existing
+    // active profile, because the panel owns the profile library and a synthesized
+    // copy would be invisible to it.
     private static void applyImportedBackendProfile(
         Context context,
         WingsImportParser.ImportedConfig importedConfig,
@@ -1821,6 +1824,14 @@ public final class AppPrefs {
             return;
         }
         if (importedConfig.hasTurnSettings && backendType.usesTurnProxy()) {
+            // A panel push must not synthesize a profile here: a new device-local copy
+            // hijacks the active profile id and drops the managed provisioning
+            // identity, which leaves it without a WG key and breaks the settings
+            // export. Fold the flat keys into the active profile instead; only a
+            // client that has no profile yet falls through to the bootstrap import.
+            if (importedConfig.panelPush && VkTurnProfileStore.updateActiveFromFlatPrefs(context) != null) {
+                return;
+            }
             // VK TURN: the transport (WG/AWG) sub-config is imported as its own
             // profile inside importActiveFromFlatPrefs, then referenced by id.
             // A single-profile share link carries the VK TURN and transport
@@ -1834,6 +1845,9 @@ public final class AppPrefs {
             return;
         }
         if (importedConfig.hasWireGuardSettings && backendType == BackendType.WIREGUARD) {
+            if (importedConfig.panelPush && WireGuardProfileStore.updateActiveFromFlatPrefs(context) != null) {
+                return;
+            }
             String title = trim(importedConfig.importedWireGuardTitle);
             WireGuardProfileStore.importActiveFromFlatPrefs(
                 context,
@@ -1842,6 +1856,9 @@ public final class AppPrefs {
             return;
         }
         if (importedConfig.hasAmneziaSettings && backendType == BackendType.AMNEZIAWG_PLAIN) {
+            if (importedConfig.panelPush && AmneziaProfileStore.updateActiveFromFlatPrefs(context) != null) {
+                return;
+            }
             String title = trim(importedConfig.importedAmneziaTitle);
             AmneziaProfileStore.importActiveFromFlatPrefs(
                 context,
@@ -2103,7 +2120,10 @@ public final class AppPrefs {
     // Replaces a backend's profile library from a full config (panel desired_config),
     // mirroring how applyImportedXraySettings replaces the Xray list. The pushed ids
     // are kept verbatim, so VK TURN transport references stay valid; the active
-    // profile is then re-projected onto the flat keys the runtime reads.
+    // profile is then re-projected onto the flat keys the runtime reads. A panel
+    // patch counts as authoritative for the list too: configpatch sends the whole
+    // set as one value, so an id it omits was removed in the panel. Only a share
+    // link adds on top of what the device already has.
     private static void applyImportedBackendProfileLists(
         Context context,
         WingsImportParser.ImportedConfig importedConfig
@@ -2132,16 +2152,18 @@ public final class AppPrefs {
         }
         if (importedConfig.hasTurnProfiles) {
             String active = trim(importedConfig.activeTurnProfileId);
-            if (importedConfig.hasAllSettings) {
-                // Full backup restore replaces the whole list.
+            if (importedConfig.hasAllSettings || importedConfig.panelPush) {
+                // A full config or a panel patch: the profile set is one value, so
+                // replace the list and read an id missing from it as "removed in the
+                // panel". Same rule the WG and AWG branches above already follow.
                 VkTurnProfileStore.setProfiles(context, importedConfig.turnProfiles);
-                if (TextUtils.isEmpty(active) && !importedConfig.turnProfiles.isEmpty()) {
-                    active = importedConfig.turnProfiles.get(0).id;
+                if (TextUtils.isEmpty(active) || !containsProfileId(importedConfig.turnProfiles, active)) {
+                    active = importedConfig.turnProfiles.isEmpty() ? "" : importedConfig.turnProfiles.get(0).id;
                 }
             } else {
-                // Targeted import (e.g. a panel-managed profile): add without
-                // discarding the user's existing profiles or the shared VK-links
-                // pool. Make the imported profile active so it is ready to use.
+                // Share link: add without discarding the user's existing profiles or
+                // the shared VK-links pool. Make the imported profile active so it is
+                // ready to use.
                 String addedId = null;
                 for (VkTurnProfile profile : importedConfig.turnProfiles) {
                     VkTurnProfile stored = VkTurnProfileStore.addImportedProfile(context, profile);
@@ -2158,6 +2180,15 @@ public final class AppPrefs {
             }
             VkTurnProfileStore.applyActiveToPrefs(context);
         }
+    }
+
+    private static boolean containsProfileId(List<VkTurnProfile> profiles, String id) {
+        for (VkTurnProfile profile : profiles) {
+            if (profile != null && id.equals(profile.id)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void forceDisableRootDependentFlags(Context context) {

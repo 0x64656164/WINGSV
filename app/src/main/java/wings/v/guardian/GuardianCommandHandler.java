@@ -188,6 +188,7 @@ public final class GuardianCommandHandler {
         try {
             wings.v.core.WingsImportParser.ImportedConfig imported =
                 wings.v.core.WingsImportParser.parseProtoConfig(cfg);
+            imported.panelPush = true;
             imported.guardianWsUrl = null;
             imported.guardianClientId = null;
             imported.guardianClientToken = null;

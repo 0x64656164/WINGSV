@@ -292,6 +292,8 @@ public class ProxyTunnelService extends Service {
     private static final long XRAY_VPN_STOP_WAIT_MS = 2_500L;
     private static final long EMERGENCY_VPN_DISPLACE_HOLD_MS = 1_500L;
     private static final long ACTIVE_PROBING_FAST_STOP_WAIT_MS = 650L;
+    /** Extra wait after fast-stop to ensure the vk-turn process is fully dead before starting a new backend. */
+    private static final long ACTIVE_PROBING_POST_STOP_WAIT_MS = 1_000L;
     private static final long ACTIVE_PROBING_PROCESS_RESTART_DELAY_MS = 350L;
     private static final long NON_XRAY_LIVENESS_STARTUP_GRACE_MS = 25_000L;
     private static final long USERSPACE_WIREGUARD_WATCHDOG_STARTUP_GRACE_MS = 10_000L;
@@ -3166,6 +3168,24 @@ public class ProxyTunnelService extends Service {
             }
         }
         return stopped;
+    }
+
+    private void awaitProxyProcessExit(long timeoutMs) {
+        long deadline = SystemClock.elapsedRealtime() + Math.max(1L, timeoutMs);
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (proxyProcess == null || !proxyProcess.isAlive()) {
+                return;
+            }
+            try {
+                Thread.sleep(50L);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        if (proxyProcess != null && proxyProcess.isAlive()) {
+            appendRuntimeLogLine("vk-turn proxy process still alive after " + timeoutMs + "ms post-stop wait");
+        }
     }
 
     private void ensureXrayVpnServiceQuiescedBeforeUserspaceBackend(int generation) throws InterruptedException {
@@ -9495,6 +9515,14 @@ public class ProxyTunnelService extends Service {
                 );
                 return;
             }
+            String vkTargetSuppression = getVkTurnTargetSuppressionReason(fallbackBackend);
+            if (!TextUtils.isEmpty(vkTargetSuppression)) {
+                appendRuntimeLogLine("Suppressing active probing fallback: " + vkTargetSuppression);
+                return;
+            }
+            if (isStaleActiveTunnelProbe(probeGeneration, probeBackend)) {
+                return;
+            }
             appendRuntimeLogLine(
                 "Active probing failed outside VPN, switching backend from Xray to " + fallbackBackend.prefValue
             );
@@ -9532,6 +9560,14 @@ public class ProxyTunnelService extends Service {
                         fallbackBackend.prefValue +
                         " is not configured"
                 );
+                return;
+            }
+            String vkTargetSuppression = getVkTurnTargetSuppressionReason(fallbackBackend);
+            if (!TextUtils.isEmpty(vkTargetSuppression)) {
+                appendRuntimeLogLine("Suppressing active probing fallback: " + vkTargetSuppression);
+                return;
+            }
+            if (isStaleActiveTunnelProbe(probeGeneration, probeBackend)) {
                 return;
             }
             appendRuntimeLogLine(
@@ -9666,6 +9702,23 @@ public class ProxyTunnelService extends Service {
             return "underlying connectivity changed " + elapsedSinceEvent + "ms ago";
         }
         return null;
+    }
+
+    /**
+     * Suppresses a switch into a vk-turn backend when VK itself is unreachable
+     * over the uplink. Probe targets failing while vk.com/vk.ru also fail means
+     * the uplink has no internet at all - switching to vk-turn cannot help and
+     * would only churn the tunnel.
+     */
+    @Nullable
+    private String getVkTurnTargetSuppressionReason(@Nullable BackendType targetBackend) {
+        if (targetBackend == null || !usesTurnProxyBackend(targetBackend)) {
+            return null;
+        }
+        if (ActiveProbingManager.isVkReachable(getApplicationContext())) {
+            return null;
+        }
+        return "vk.com/vk.ru unreachable over the uplink - no internet to switch for";
     }
 
     private void triggerActiveProbeReconnect(String reason) {
@@ -11193,6 +11246,11 @@ public class ProxyTunnelService extends Service {
         }
         if (reconnectGeneration != runtimeGeneration.get() || sServiceState == ServiceState.STOPPED) {
             return;
+        }
+        // Wait for the old vk-turn process to fully exit before starting the new backend,
+        // preventing "vk-turn not stopped yet" race when switching backends.
+        if (swappingBackend && usesTurnProxyBackend(resolvedBackendToStop)) {
+            awaitProxyProcessExit(ACTIVE_PROBING_POST_STOP_WAIT_MS);
         }
         stopping = false;
         beginErrorNoticeSession();

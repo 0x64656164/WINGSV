@@ -30,16 +30,18 @@ import wings.v.ActiveProbingSettingsActivity;
 import wings.v.R;
 import wings.v.service.ProxyTunnelService;
 
-@SuppressWarnings({
-    "PMD.DoNotUseThreads",
-    "PMD.AvoidCatchingGenericException",
-    "PMD.CommentRequired",
-    "PMD.LawOfDemeter",
-    "PMD.MethodArgumentCouldBeFinal",
-    "PMD.LocalVariableCouldBeFinal",
-    "PMD.LongVariable",
-    "PMD.OnlyOneReturn",
-})
+@SuppressWarnings(
+    {
+        "PMD.DoNotUseThreads",
+        "PMD.AvoidCatchingGenericException",
+        "PMD.CommentRequired",
+        "PMD.LawOfDemeter",
+        "PMD.MethodArgumentCouldBeFinal",
+        "PMD.LocalVariableCouldBeFinal",
+        "PMD.LongVariable",
+        "PMD.OnlyOneReturn",
+    }
+)
 public final class ActiveProbingManager {
 
     public static final String KEY_OPEN_SETTINGS = "pref_open_active_probing_settings";
@@ -398,6 +400,47 @@ public final class ActiveProbingManager {
             } catch (Exception ignored) {}
         }
         return new ProbeResult(true, urls.size(), successCount, failedTargets, details);
+    }
+
+    private static final String[] VK_REACHABILITY_URLS = { "https://vk.com/", "https://vk.ru/" };
+
+    /**
+     * Direct reachability of VK over the physical uplink. Auto-switching into a
+     * vk-turn backend is pointless when vk.com/vk.ru are both down: the probe
+     * targets failing then just means the uplink has no internet at all, which
+     * a VPN cannot fix - the switch would only churn the tunnel.
+     */
+    public static boolean isVkReachable(@Nullable Context context) {
+        if (context == null) {
+            return false;
+        }
+        Context appContext = context.getApplicationContext();
+        Network network = findUsablePhysicalNetwork(appContext);
+        if (network == null) {
+            return false;
+        }
+        int timeoutMs = (int) Math.max(500L, getSettings(appContext).timeoutMs());
+        String transport = transportLabel(appContext, network);
+        boolean reachable = false;
+        try (ExecutorScope executorScope = new ExecutorScope(VK_REACHABILITY_URLS.length)) {
+            ArrayList<Future<ProbeDetail>> futures = new ArrayList<>();
+            for (String url : VK_REACHABILITY_URLS) {
+                futures.add(
+                    executorScope.executor.submit(new ProbeTask(network, url, hostOf(url), transport, timeoutMs))
+                );
+            }
+            for (Future<ProbeDetail> future : futures) {
+                try {
+                    if (future.get(timeoutMs + 750L, TimeUnit.MILLISECONDS).ok) {
+                        reachable = true;
+                        break;
+                    }
+                } catch (Exception ignored) {
+                    // The other domain may still answer; keep checking.
+                }
+            }
+        }
+        return reachable;
     }
 
     private static final class ExecutorScope implements AutoCloseable {

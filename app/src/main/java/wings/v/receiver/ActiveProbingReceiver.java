@@ -49,6 +49,11 @@ public class ActiveProbingReceiver extends BroadcastReceiver {
                 if (!TextUtils.isEmpty(fallbackSettings.validate(appContext))) {
                     return;
                 }
+                // No internet at all: if vk.com/vk.ru fail over the uplink too, the probe
+                // targets failing is not something a tunnel would fix - skip the churn.
+                if (fallbackBackend.usesTurnProxy() && !ActiveProbingManager.isVkReachable(appContext)) {
+                    return;
+                }
                 BackendType restoreBackend = XrayStore.getBackendType(appContext);
                 if (restoreBackend == null || !restoreBackend.usesXrayCore()) {
                     restoreBackend = BackendType.XRAY;

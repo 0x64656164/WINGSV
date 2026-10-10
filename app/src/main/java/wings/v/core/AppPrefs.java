@@ -1470,10 +1470,7 @@ public final class AppPrefs {
         } else {
             packages.remove(packageName);
         }
-        prefs(context)
-            .edit()
-            .putStringSet(byeDpiPackagesKey(context), new LinkedHashSet<>(packages))
-            .commit();
+        prefs(context).edit().putStringSet(byeDpiPackagesKey(context), new LinkedHashSet<>(packages)).commit();
     }
 
     // The ByeDPI divert is emitted into the xray-core config only, so the
@@ -2003,10 +2000,7 @@ public final class AppPrefs {
             editor.putString(KEY_CAPTCHA_AUTO_SOLVER, normalizeCaptchaAutoSolver(importedConfig.captchaAutoSolver));
         }
         if (importedConfig.vkTurnRestartOnNetworkChange != null) {
-            editor.putBoolean(
-                KEY_VK_TURN_RESTART_ON_NETWORK_CHANGE,
-                importedConfig.vkTurnRestartOnNetworkChange
-            );
+            editor.putBoolean(KEY_VK_TURN_RESTART_ON_NETWORK_CHANGE, importedConfig.vkTurnRestartOnNetworkChange);
         }
         if (importedConfig.vkTurnRuntimeMode != null) {
             editor.putString(KEY_VK_TURN_RUNTIME_MODE, importedConfig.vkTurnRuntimeMode.prefValue);
@@ -2037,13 +2031,10 @@ public final class AppPrefs {
         }
         if (importedConfig.localEndpoint != null) {
             String localEndpoint = trim(importedConfig.localEndpoint);
-            editor.putString(
-                KEY_LOCAL_ENDPOINT,
-                TextUtils.isEmpty(localEndpoint) ? "127.0.0.1:9000" : localEndpoint
-            );
+            editor.putString(KEY_LOCAL_ENDPOINT, TextUtils.isEmpty(localEndpoint) ? "127.0.0.1:9000" : localEndpoint);
         }
-        // host в протобуфе без optional, присутствия нет: пустое значение читаем как
-        // "панель не присылала" и оставляем устройство на своём хосте
+        // host - optional: отсутствие поля читаем как "панель не присылала".
+        // Пустое значение не очищаем, оставляем устройство на своём хосте
         String importedTurnHost = trim(importedConfig.turnHost);
         if (!TextUtils.isEmpty(importedTurnHost)) {
             editor.putString(KEY_TURN_HOST, importedTurnHost);

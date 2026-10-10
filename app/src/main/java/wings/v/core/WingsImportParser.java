@@ -2725,8 +2725,8 @@ public final class WingsImportParser {
         // create time and never sets them again, so requiring CONFIG_TYPE_ALL
         // silently dropped app_routing from every push.
         boolean allSettings =
-            config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_ALL
-                || config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_UNSPECIFIED;
+            config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_ALL ||
+            config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_UNSPECIFIED;
         importedConfig.hasAllSettings = allSettings;
 
         // Read every section the delta actually carries, whatever the declared
@@ -2872,7 +2872,6 @@ public final class WingsImportParser {
             if (config.hasWg() && (allSettings || config.getWg().getProfilesCount() == 0)) {
                 parseWireGuard(config.getWg(), importedConfig);
             }
-
         }
 
         if (allSettings || config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_XPOSED || config.hasXposed()) {
@@ -2882,20 +2881,17 @@ public final class WingsImportParser {
             if (!allSettings && config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_XPOSED) {
                 importedConfig.updateBackendType = false;
             }
-
         }
 
         if (allSettings || config.hasRoot()) {
             if (config.hasRoot()) {
                 parseRootSettings(config.getRoot(), importedConfig);
             }
-
         }
         if (allSettings || config.hasAppPreferences()) {
             if (config.hasAppPreferences()) {
                 parseAppPreferences(config.getAppPreferences(), importedConfig);
             }
-
         }
         if (allSettings || config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_GUARDIAN || config.hasGuardian()) {
             if (config.hasGuardian()) {
@@ -2904,25 +2900,21 @@ public final class WingsImportParser {
             if (!allSettings && config.getType() == WingsvProto.ConfigType.CONFIG_TYPE_GUARDIAN) {
                 importedConfig.updateBackendType = false;
             }
-
         }
         if (allSettings || config.hasSubscriptionHwid()) {
             if (config.hasSubscriptionHwid()) {
                 parseSubscriptionHwid(config.getSubscriptionHwid(), importedConfig);
             }
-
         }
         if (allSettings || config.hasSharing()) {
             if (config.hasSharing()) {
                 parseSharing(config.getSharing(), importedConfig);
             }
-
         }
         if (allSettings || config.hasByeDpi()) {
             if (config.hasByeDpi()) {
                 parseByeDpi(config.getByeDpi(), importedConfig);
             }
-
         }
 
         // Nothing to apply is not an error: an empty delta (or one whose sections this
@@ -2986,7 +2978,7 @@ public final class WingsImportParser {
             importedConfig.turnSessionMode = fromProtoSessionMode(turn.getSessionMode());
         }
         importedConfig.localEndpoint = turn.hasLocalEndpoint() ? formatEndpoint(turn.getLocalEndpoint()) : null;
-        importedConfig.turnHost = value(turn.getHost());
+        importedConfig.turnHost = turn.hasHost() ? value(turn.getHost()) : "";
         importedConfig.turnPort = turn.hasPort() ? String.valueOf(turn.getPort()) : null;
         if (turn.hasManualCaptcha()) {
             importedConfig.manualCaptcha = turn.getManualCaptcha();
@@ -2998,11 +2990,10 @@ public final class WingsImportParser {
         if (turn.hasRestartOnNetworkChange()) {
             importedConfig.vkTurnRestartOnNetworkChange = turn.getRestartOnNetworkChange();
         }
-        // Поле не optional, поэтому присутствия в протобуфе нет: пустое значение
-        // трактуем как "панель его не присылала" и оставляем устройство на своём
-        String fingerprint = value(turn.getBrowserFingerprint());
-        if (!TextUtils.isEmpty(fingerprint)) {
-            importedConfig.vkTurnBrowserFingerprint = fingerprint;
+        // Поле optional: отсутствие отличает "панель не присылала" от присланного
+        // значения; пустое не очищает настройку (пусто / "auto" - relay сам выберёт)
+        if (turn.hasBrowserFingerprint()) {
+            importedConfig.vkTurnBrowserFingerprint = value(turn.getBrowserFingerprint());
         }
         if (turn.getRuntimeMode() != WingsvProto.ProxyRuntimeMode.PROXY_RUNTIME_MODE_UNSPECIFIED) {
             importedConfig.vkTurnRuntimeMode = fromProtoRuntimeMode(turn.getRuntimeMode());
@@ -3116,7 +3107,7 @@ public final class WingsImportParser {
             importedConfig.importedWireGuardTitle = value(wg.getTitle());
         }
         // null, а не "": отсутствие поля в дельте не должно означать "очистить".
-// Иначе панель, не присылающая wg-ключи, затирала их у клиента пустыми
+        // Иначе панель, не присылающая wg-ключи, затирала их у клиента пустыми
         // строками и приложение начинало требовать WG-параметры
         importedConfig.wgEndpoint = wg.hasEndpoint() ? formatEndpoint(wg.getEndpoint()) : null;
         if (wg.hasIface()) {

@@ -162,7 +162,7 @@ message Turn {
   optional bool use_udp = 4;
   optional bool no_obfuscation = 5;
   Endpoint local_endpoint = 6;
-  string host = 7;
+  optional string host = 7;
   optional uint32 port = 8;
   TurnSessionMode session_mode = 9;
   repeated string links = 10;
@@ -181,8 +181,9 @@ message Turn {
   // в любом случае встроенный список остаётся как fallback.
   repeated string user_dns = 17;
   // Какой туннель пускать поверх VK TURN userspace-прокси: WG или AWG.
-  // UNSPECIFIED трактуется как WIREGUARD (поведение до введения поля).
-  TunnelMode tunnel_mode = 18;
+  // UNSPECIFIED (в том числе отсутствие поля) трактуется как WIREGUARD
+  // (поведение до введения поля).
+  optional TunnelMode tunnel_mode = 18;
   // Режим WRAP per-packet obfuscation. UNSPECIFIED ≡ PREFERRED.
   WrapMode wrap_mode = 19;
   // Pre-shared ключ для WRAP (32 байта для AES-256-CTR/ChaCha20-XOR).
@@ -208,7 +209,7 @@ message Turn {
   // Семейство браузерного отпечатка для HTTP+TLS-имитации relay'ем:
   // "auto" | "chrome" | "edge" | "safari" | "firefox". Пусто / "auto" - relay
   // выбирает случайный профиль на сессию; остальные фиксируют одно семейство.
-  string browser_fingerprint = 27;
+  optional string browser_fingerprint = 27;
 }
 
 message TurnProfile {

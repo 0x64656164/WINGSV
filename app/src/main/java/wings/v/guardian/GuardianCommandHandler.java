@@ -162,12 +162,15 @@ public final class GuardianCommandHandler {
     public static void applyConfigPush(Context context, GuardianProto.ConfigPush push) {
         Context ctx = context.getApplicationContext();
         ProxyTunnelService.writeRuntimeLogLine(
-            "[guardian] applyConfigPush: entered, push=" + (push != null)
-            + " config=" + (push != null && push.getConfig() != null));
+            "[guardian] applyConfigPush: entered, push=" +
+                (push != null) +
+                " config=" +
+                (push != null && push.getConfig() != null)
+        );
         if (push == null || push.getConfig() == null) {
             return;
         }
-    
+
         var cfg = push.getConfig();
         if (cfg.getVer() <= 0) {
             // Шапка от старой панели: ver - это версия формата, а не ревизия, и
@@ -175,19 +178,27 @@ public final class GuardianCommandHandler {
             // значение безобидно. Штамповать его должна панель.
             cfg = cfg.toBuilder().setVer(1).build();
             ProxyTunnelService.writeRuntimeLogLine(
-                "[guardian] applyConfigPush: panel sent no config schema version, assuming our own");
+                "[guardian] applyConfigPush: panel sent no config schema version, assuming our own"
+            );
         }
-    
+
         ProxyTunnelService.writeRuntimeLogLine(
-            "[guardian] applyConfigPush: ver=" + cfg.getVer()
-            + " type=" + cfg.getType()
-            + " backend=" + cfg.getBackend()
-            + " mergeXray=" + (cfg.hasXray() && cfg.getXray().getMergeOnly())
-            + " mergeTurn=" + (cfg.hasTurn() && cfg.getTurn().getMergeOnly()));
-    
+            "[guardian] applyConfigPush: ver=" +
+                cfg.getVer() +
+                " type=" +
+                cfg.getType() +
+                " backend=" +
+                cfg.getBackend() +
+                " mergeXray=" +
+                (cfg.hasXray() && cfg.getXray().getMergeOnly()) +
+                " mergeTurn=" +
+                (cfg.hasTurn() && cfg.getTurn().getMergeOnly())
+        );
+
         try {
-            wings.v.core.WingsImportParser.ImportedConfig imported =
-                wings.v.core.WingsImportParser.parseProtoConfig(cfg);
+            wings.v.core.WingsImportParser.ImportedConfig imported = wings.v.core.WingsImportParser.parseProtoConfig(
+                cfg
+            );
             imported.panelPush = true;
             imported.guardianWsUrl = null;
             imported.guardianClientId = null;
@@ -202,19 +213,28 @@ public final class GuardianCommandHandler {
                 AppPrefs.setGuardianLastAppliedConfigVersion(ctx, version);
             }
             ProxyTunnelService.writeRuntimeLogLine(
-                "[guardian] applyConfigPush: OK, backend=" + imported.backendType
-                + " hasAll=" + imported.hasAllSettings
-                + " hasTurn=" + imported.hasTurnSettings
-                + " hasWg=" + imported.hasWireGuardSettings
-                + " hasAmnezia=" + imported.hasAmneziaSettings
-                + " hasXray=" + imported.hasXraySettings
-                + " hasAppRouting=" + imported.hasAppRouting
-                + " hasXrayRouting=" + imported.hasXrayRouting);
+                "[guardian] applyConfigPush: OK, backend=" +
+                    imported.backendType +
+                    " hasAll=" +
+                    imported.hasAllSettings +
+                    " hasTurn=" +
+                    imported.hasTurnSettings +
+                    " hasWg=" +
+                    imported.hasWireGuardSettings +
+                    " hasAmnezia=" +
+                    imported.hasAmneziaSettings +
+                    " hasXray=" +
+                    imported.hasXraySettings +
+                    " hasAppRouting=" +
+                    imported.hasAppRouting +
+                    " hasXrayRouting=" +
+                    imported.hasXrayRouting
+            );
         } catch (Exception error) {
             Log.w(TAG, "config push apply failed: " + error.getMessage());
             ProxyTunnelService.writeRuntimeLogLine(
-                "[guardian] applyConfigPush FAILED: " + error.getClass().getSimpleName()
-                + ": " + error.getMessage());
+                "[guardian] applyConfigPush FAILED: " + error.getClass().getSimpleName() + ": " + error.getMessage()
+            );
         }
     }
 }

@@ -324,6 +324,8 @@ public class ProxyTunnelService extends Service {
     private static final int PROXY_START_MAX_ATTEMPTS = 3;
     private static final int WB_STREAM_EXCHANGE_MAX_ATTEMPTS = 3;
     private static final long WB_STREAM_EXCHANGE_RETRY_DELAY_MS = 4_000L;
+    private static final int PUBLIC_IP_VPN_NETWORK_MAX_ATTEMPTS = 5;
+    private static final long PUBLIC_IP_VPN_NETWORK_RETRY_DELAY_MS = 3_000L;
     private static final int MAX_PROXY_LOG_LINES = 600;
     private static final long ROOT_TETHER_SYNC_INTERVAL_MS = 3_000L;
     // Android periodically wipes the tether masquerade/routing on its own (network
@@ -635,6 +637,8 @@ public class ProxyTunnelService extends Service {
 
     private volatile PublicIpFetcher.Request publicIpRequest;
     private volatile int publicIpRequestGeneration;
+    private volatile int publicIpVpnNetworkAttempts;
+    private volatile ScheduledFuture<?> publicIpVpnNetworkRetryTask;
     private volatile boolean stopping;
     private boolean tetherReceiverRegistered;
     private boolean tetherEventCallbackRegistered;
@@ -10705,22 +10709,57 @@ public class ProxyTunnelService extends Service {
             }
             cancelPublicIpRefresh();
         }
-
+        boolean preferVpn = shouldPreferVpnForPublicIp();
+        if (preferVpn && !PublicIpFetcher.hasUsableVpnNetwork(getApplicationContext())) {
+            // The tun is up but ConnectivityService has not published the VPN
+            // network yet. A default-network fetch would egress physically (this
+            // app is not in the tunnel whitelist) and pin the real IP until the
+            // next reconnect, so wait for the network to appear first.
+            int attempt = publicIpVpnNetworkAttempts + 1;
+            if (attempt > PUBLIC_IP_VPN_NETWORK_MAX_ATTEMPTS) {
+                appendRuntimeLogLine(
+                    "Public IP refresh: VPN network still missing after " +
+                        PUBLIC_IP_VPN_NETWORK_MAX_ATTEMPTS +
+                        " attempts; fetching via the default network"
+                );
+                publicIpVpnNetworkAttempts = 0;
+            } else {
+                publicIpVpnNetworkAttempts = attempt;
+                appendRuntimeLogLine(
+                    "Public IP refresh: VPN network not ready (attempt " +
+                        attempt +
+                        "/" +
+                        PUBLIC_IP_VPN_NETWORK_MAX_ATTEMPTS +
+                        "); retrying in " +
+                        (PUBLIC_IP_VPN_NETWORK_RETRY_DELAY_MS / 1_000L) +
+                        "s"
+                );
+                cancelPublicIpVpnNetworkRetry();
+                publicIpVpnNetworkRetryTask = reconnectScheduler.schedule(
+                    this::retryPublicIpVpnNetworkRefresh,
+                    PUBLIC_IP_VPN_NETWORK_RETRY_DELAY_MS,
+                    TimeUnit.MILLISECONDS
+                );
+                return;
+            }
+        } else {
+            publicIpVpnNetworkAttempts = 0;
+        }
         setPublicIpRefreshInProgress(true);
         publicIpRequestGeneration++;
         final int requestGeneration = publicIpRequestGeneration;
-        publicIpRequest = PublicIpFetcher.fetchAsyncCancelable(
-            getApplicationContext(),
-            shouldPreferVpnForPublicIp(),
-            result -> {
-                if (requestGeneration != publicIpRequestGeneration) {
-                    return;
-                }
-                publicIpRequest = null;
-                setPublicIpRefreshInProgress(false);
-                applyPublicIpInfo(result);
+        publicIpRequest = PublicIpFetcher.fetchAsyncCancelable(getApplicationContext(), preferVpn, result -> {
+            if (requestGeneration != publicIpRequestGeneration) {
+                return;
             }
-        );
+            publicIpRequest = null;
+            setPublicIpRefreshInProgress(false);
+            applyPublicIpInfo(result);
+        });
+    }
+
+    private void retryPublicIpVpnNetworkRefresh() {
+        requestPublicIpRefresh(false);
     }
 
     private boolean shouldPreferVpnForPublicIp() {
@@ -10732,7 +10771,17 @@ public class ProxyTunnelService extends Service {
         );
     }
 
+    private void cancelPublicIpVpnNetworkRetry() {
+        ScheduledFuture<?> vpnNetworkRetryTask = publicIpVpnNetworkRetryTask;
+        publicIpVpnNetworkRetryTask = null;
+        if (vpnNetworkRetryTask != null) {
+            vpnNetworkRetryTask.cancel(false);
+        }
+    }
+
     private void cancelPublicIpRefresh() {
+        cancelPublicIpVpnNetworkRetry();
+        publicIpVpnNetworkAttempts = 0;
         PublicIpFetcher.Request activeRequest = publicIpRequest;
         if (activeRequest != null) {
             activeRequest.cancel();

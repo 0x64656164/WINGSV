@@ -131,6 +131,10 @@ public final class PublicIpFetcher {
         return fetchInfoSyncInternal(context != null ? context.getApplicationContext() : null, preferVpn, null, null);
     }
 
+    public static boolean hasUsableVpnNetwork(Context context) {
+        return findVpnNetwork(context) != null;
+    }
+
     private static IpInfo fetchInfoSyncInternal(
         Context context,
         boolean preferVpn,

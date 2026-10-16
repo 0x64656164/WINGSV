@@ -1978,7 +1978,11 @@ public class ProxyTunnelService extends Service {
                 stopWorkInternalForReconnect(activeBackendType, false);
                 // Re-check after the teardown: a stop/abort may have landed during
                 // the cleanup window above. If so, do not resurrect CONNECTING.
-                if (sServiceState == ServiceState.STOPPED || stopping || generation != runtimeGeneration.get()) {
+                // The stopping flag is deliberately not checked here: the cleanup
+                // above set it itself, while every external stop path either bumps
+                // the runtime generation (invalidateRuntimeOperations) or writes
+                // STOPPED, and both are still caught by this condition.
+                if (sServiceState == ServiceState.STOPPED || generation != runtimeGeneration.get()) {
                     if (sServiceState == ServiceState.STOPPED) {
                         stopSelf();
                     }

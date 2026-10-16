@@ -9909,6 +9909,29 @@ public class ProxyTunnelService extends Service {
 
     private void ensureOwnedVpnBackendStopped(String backendName, int generation) throws InterruptedException {
         ensureRuntimeStillWanted(generation);
+        if (!hasOwnedVpnServiceRuntime()) {
+            return;
+        }
+        // The previous backend's VpnService often needs a beat to report DOWN after
+        // a switch; wait it out (with a stuck-tun displacement on timeout) instead
+        // of failing the whole start on a transient overlap.
+        if (XrayVpnService.hasActiveTunnel() || XrayVpnService.getServiceNow() != null) {
+            appendRuntimeLogLine(
+                "Waiting for previous Xray VPN service teardown before starting " + backendName + " backend"
+            );
+            forceStopXrayVpnServiceAndWait("Xray VPN service stop before " + backendName + " start");
+        }
+        if (GoBackendVpnAccess.getServiceNow() != null || AwgBackendVpnAccess.getServiceNow() != null) {
+            appendRuntimeLogLine(
+                "Waiting for previous userspace VPN service teardown before starting " + backendName + " backend"
+            );
+            if (!stopUserspaceVpnServicesAndWait()) {
+                throw new IllegalStateException(
+                    getString(R.string.proxy_previous_vpn_backend_not_down_named, backendName)
+                );
+            }
+        }
+        ensureRuntimeStillWanted(generation);
         if (hasOwnedVpnServiceRuntime()) {
             throw new IllegalStateException(getString(R.string.proxy_previous_vpn_backend_not_down_named, backendName));
         }

@@ -637,7 +637,7 @@
     <string name="active_probing_xray_fallback_backend_title">Fallback backend for Xray</string>
     <string name="active_probing_xray_fallback_backend_summary">Where to switch from Xray when direct checks fail</string>
     <string name="active_probing_vk_turn_title">Auto-switch on VK TURN</string>
-    <string name="active_probing_vk_turn_summary">When a TURN backend is active, checks the same sites outside the VPN and switches the backend back to the original direct variant when checks pass again</string>
+    <string name="active_probing_vk_turn_summary">When a TURN backend is active, checks the same sites outside the VPN and switches back to the backend you used before the relay once the checks pass again</string>
     <string name="active_probing_background_category">In background without active tunnel</string>
     <string name="active_probing_background_title">Background auto-switch</string>
     <string name="active_probing_background_summary">When the tunnel is down, checks sites in the background outside the VPN and automatically brings up the selected fallback backend if all checks fail</string>

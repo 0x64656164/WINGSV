@@ -172,16 +172,6 @@ public enum BackendType {
         return this;
     }
 
-    public BackendType toPlainVariant() {
-        if (this == VK_TURN_WIREGUARD) {
-            return WIREGUARD;
-        }
-        if (this == AMNEZIAWG) {
-            return AMNEZIAWG_PLAIN;
-        }
-        return this;
-    }
-
     /**
      * Top-level группировка для UI dropdown «Активный backend». Возвращает один из
      * 5 ярлыков: {@code vk_turn}, {@code wb_stream}, {@code wireguard},

@@ -9695,20 +9695,11 @@ public class ProxyTunnelService extends Service {
 
     @Nullable
     private BackendType resolveActiveProbeRestoreBackend() {
-        BackendType storedRestoreBackend = ActiveProbingManager.getRestoreBackend(getApplicationContext());
-        if (storedRestoreBackend != null) {
-            return storedRestoreBackend;
-        }
-        // XrayStore records the source of every switch into a relay, so this is only
-        // the fallback for setups without that history yet (preferences from an
-        // older build, or a backend already set to TURN before the first switch).
-        // The direct counterpart is the best guess there; when it is also the
-        // active backend (WB Stream) there is nothing to restore.
-        BackendType plainVariant = activeBackendType != null ? activeBackendType.toPlainVariant() : null;
-        if (plainVariant == null || plainVariant == activeBackendType) {
-            return null;
-        }
-        return plainVariant;
+        // Only a backend the user actually left for the relay is a valid target.
+        // Guessing the relay's "plain" counterpart would switch e.g. VK TURN WG to
+        // WireGuard that the user never configured, so an unset target means no
+        // automatic restore at all.
+        return ActiveProbingManager.getRestoreBackend(getApplicationContext());
     }
 
     @Nullable

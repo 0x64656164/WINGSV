@@ -636,7 +636,7 @@
     <string name="active_probing_xray_fallback_backend_title">Резервный backend для Xray</string>
     <string name="active_probing_xray_fallback_backend_summary">Куда переключаться из Xray, если direct проверки не проходят</string>
     <string name="active_probing_vk_turn_title">Автопереключение при VK TURN</string>
-    <string name="active_probing_vk_turn_summary">При активном TURN-backend проверяет те же сайты мимо VPN и возвращает backend на исходный direct-вариант, когда проверки снова проходят</string>
+    <string name="active_probing_vk_turn_summary">При активном TURN-backend проверяет те же сайты мимо VPN и после успешных проверок возвращает backend, с которого переключились на TURN</string>
     <string name="active_probing_background_category">В фоне без активного туннеля</string>
     <string name="active_probing_background_title">Фоновое автопереключение</string>
     <string name="active_probing_background_summary">Когда туннель не поднят, в фоне проверяет сайты мимо VPN и автоматически поднимает выбранный резервный backend, если все проверки недоступны</string>

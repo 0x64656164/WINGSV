@@ -9689,7 +9689,20 @@ public class ProxyTunnelService extends Service {
 
     @Nullable
     private BackendType resolveActiveProbeRestoreBackend() {
-        return ActiveProbingManager.getRestoreBackend(getApplicationContext());
+        BackendType storedRestoreBackend = ActiveProbingManager.getRestoreBackend(getApplicationContext());
+        if (storedRestoreBackend != null) {
+            return storedRestoreBackend;
+        }
+        // XrayStore records the source of every switch into a relay, so this is only
+        // the fallback for setups without that history yet (preferences from an
+        // older build, or a backend already set to TURN before the first switch).
+        // The direct counterpart is the best guess there; when it is also the
+        // active backend (WB Stream) there is nothing to restore.
+        BackendType plainVariant = activeBackendType != null ? activeBackendType.toPlainVariant() : null;
+        if (plainVariant == null || plainVariant == activeBackendType) {
+            return null;
+        }
+        return plainVariant;
     }
 
     @Nullable

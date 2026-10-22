@@ -3233,7 +3233,13 @@ public class ProxyTunnelService extends Service {
 
         BackendType resolvedBackendToStop = backendToStop != null ? backendToStop : activeBackendType;
         boolean backendStopped;
-        if (usesXrayBackend(resolvedBackendToStop)) {
+        // A non-root VK TURN / plain-WG run tunnels through the xray-core gVisor TUN
+        // (XrayVpnService), not the GoBackend userspace VpnService, even though its
+        // backend type is not an xray one. Without this the tun survives the switch,
+        // stays the default network, and the new runtime waits forever in
+        // waitForUsablePhysicalNetwork ("No usable physical network yet").
+        boolean xrayVpnLingering = XrayVpnService.isServiceAlive() || XrayVpnService.hasActiveTunnel();
+        if (usesXrayBackend(resolvedBackendToStop) || activeXrayWgRuntime || xrayVpnLingering) {
             backendStopped = stopXrayBackendForActiveProbeSwitch();
         } else {
             backendStopped = stopUserspaceBackendForActiveProbeSwitch();

@@ -3,6 +3,7 @@ package wings.v.core;
 import android.content.Context;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import org.amnezia.awg.config.Config;
 import org.amnezia.awg.config.InetEndpoint;
@@ -62,7 +63,14 @@ public final class AmneziaConfigFactory {
         if (!appRoutingPackages.isEmpty()) {
             AppRoutingMode mode = AppPrefs.getAppRoutingMode(context);
             if (mode.isWhitelistFamily()) {
-                ifaceBuilder.includeApplications(appRoutingPackages);
+                // Our own package stays in the whitelist tunnel so the public IP
+                // fetch can use the VPN Network; an app outside
+                // includeApplications is refused there and the UI stays without
+                // an IP. The tunnel's own socket is protected by the GoBackend
+                // VpnService, so this does not create a loop.
+                Set<String> includePackages = new LinkedHashSet<>(appRoutingPackages);
+                includePackages.add(context.getPackageName());
+                ifaceBuilder.includeApplications(includePackages);
             } else {
                 ifaceBuilder.excludeApplications(appRoutingPackages);
             }

@@ -419,12 +419,19 @@ public class XrayVpnService extends VpnService implements DialerController {
         }
         try {
             if (mode == AppRoutingMode.WHITELIST) {
+                // Our own package has to be inside the whitelist tunnel as well. An
+                // app that is not in addAllowedApplication is refused when it binds
+                // to the VPN Network, so the public IP fetch through that network
+                // fails for every endpoint and the UI stays on "loading" forever.
+                // The tunnel's own upstream sockets are protected (xray protectFd,
+                // vk-turn protect bridge), so this does not create a loop.
+                builder.addAllowedApplication(getPackageName());
                 for (String packageName : packages) {
                     builder.addAllowedApplication(packageName);
                 }
                 addByeDpiAllowedApplications(builder, byeDpiPackages);
                 ProxyTunnelService.writeRuntimeLogLine(
-                    "App routing: WHITELIST addAllowedApplication x" + packages.size()
+                    "App routing: WHITELIST addAllowedApplication x" + (packages.size() + 1)
                 );
             } else if (mode == AppRoutingMode.BYPASS) {
                 // Plain Bypass: exclude the selected apps at the Android layer.

@@ -52,11 +52,19 @@ public final class WireGuardConfigFactory {
             Set<String> routedPackages =
                 context != null ? new TreeSet<>(AppPrefs.getEffectiveAppRoutingPackages(context)) : new TreeSet<>();
             if (!routedPackages.isEmpty()) {
-                String joinedPackages = String.join(", ", routedPackages);
                 AppRoutingMode mode = AppPrefs.getAppRoutingMode(context);
                 if (mode.isWhitelistFamily()) {
+                    // Keep our own package in the whitelist tunnel: an app outside
+                    // IncludedApplications is refused when it binds to the VPN
+                    // Network, which makes the public IP fetch fail and leaves the UI
+                    // without an IP. The tunnel's own socket is protected by the
+                    // GoBackend VpnService, so this does not create a loop.
+                    Set<String> includePackages = new TreeSet<>(routedPackages);
+                    includePackages.add(context.getPackageName());
+                    String joinedPackages = String.join(", ", includePackages);
                     builder.append("IncludedApplications = ").append(joinedPackages).append('\n');
                 } else {
+                    String joinedPackages = String.join(", ", routedPackages);
                     builder.append("ExcludedApplications = ").append(joinedPackages).append('\n');
                 }
             }

@@ -10712,9 +10712,9 @@ public class ProxyTunnelService extends Service {
         boolean preferVpn = shouldPreferVpnForPublicIp();
         if (preferVpn && !PublicIpFetcher.hasUsableVpnNetwork(getApplicationContext())) {
             // The tun is up but ConnectivityService has not published the VPN
-            // network yet. A default-network fetch would egress physically (this
-            // app is not in the tunnel whitelist) and pin the real IP until the
-            // next reconnect, so wait for the network to appear first.
+            // network yet. A default-network fetch would still egress
+            // physically and pin the real IP until the next reconnect, so wait
+            // for the network to appear first.
             int attempt = publicIpVpnNetworkAttempts + 1;
             if (attempt > PUBLIC_IP_VPN_NETWORK_MAX_ATTEMPTS) {
                 appendRuntimeLogLine(

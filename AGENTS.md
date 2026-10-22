@@ -182,7 +182,32 @@ Bump rule: commit inside the submodule first (zstd-jni uses upstream's style; WI
 this `[scope]` style), then `[external/<path>] bump` the pointer in the parent repo. Do not push
 either without confirmation.
 
-## 9. Pointers
+## 9. Releases
+
+A release is tag-driven: push an annotated tag `vX.Y.Z` on `main` (only with explicit user
+confirmation, same as any push). The tag triggers the `Release` workflow
+(`.github/workflows/release.yml`), which assembles both ABI release APKs, the
+`wingsv-root-module.zip` root helper, zstd patches against the previous release, and
+`sha256`/`sha512` checksums for every asset, then creates a DRAFT GitHub release with
+auto-generated notes and 15 assets attached.
+
+The draft is finished by hand over the REST API - the `gh` CLI is not available here, and
+the auth token lives outside the repo (`github-credentials.txt` in the WINGS root, mirrored
+into the Windows credential store):
+
+- Find the draft's release id with `GET /repos/<owner>/<repo>/releases`. Listing works;
+  the by-tag GET can 404 on a draft.
+- Rewrite the body from a node script that builds the PATCH payload with `JSON.stringify`:
+  PowerShell `ConvertTo-Json` turns `\n` into literal backslash-n on GitHub. Body template
+  (Russian, established by earlier releases): `### WINGS V X.Y.Z`, a one-line summary,
+  `### Что изменилось` bullets, `### Файлы` bullets naming the assets, a closing checksum
+  sentence. The release name is `vX.Y.Z`.
+- Publish by PATCHing the same release with `draft=false`.
+
+What a given release contained, and any open follow-ups, live in the session handoff notes
+outside this repo - not here.
+
+## 10. Pointers
 
 The server side (panel) is a separate repo, WINGS-N/3x-ui, with the vk-turn-proxy inbound built
 in; the landing / panel UI lives in v.wingsnet.org (pnpm). Both are out of scope for this repo's

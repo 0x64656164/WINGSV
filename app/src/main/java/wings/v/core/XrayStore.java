@@ -52,14 +52,32 @@ public final class XrayStore {
 
     public static void setBackendType(Context context, BackendType backendType) {
         Context appContext = context.getApplicationContext();
-        prefs(appContext)
-            .edit()
-            .putString(
-                AppPrefs.KEY_BACKEND_TYPE,
-                backendType == null ? BackendType.VK_TURN_WIREGUARD.prefValue : backendType.prefValue
-            )
-            .commit();
+        BackendType previousBackendType = getBackendType(appContext);
+        BackendType resolvedBackendType = backendType == null ? BackendType.VK_TURN_WIREGUARD : backendType;
+        prefs(appContext).edit().putString(AppPrefs.KEY_BACKEND_TYPE, resolvedBackendType.prefValue).commit();
+        rememberBackendForVkTurnRestore(appContext, previousBackendType, resolvedBackendType);
         QuickSettingsTiles.requestRefresh(appContext);
+    }
+
+    // The VK TURN auto-restore has to bring back the backend the user came from,
+    // whatever it was, so every switch into a relay records its source here - this
+    // is the one place manual and automatic backend changes go through. A
+    // relay-to-relay switch (VK TURN WG -> VK TURN AWG, or into WB Stream) keeps
+    // the earlier target: restoring the previous relay would only churn between
+    // two TURN backends. Leaving a relay drops the target again.
+    private static void rememberBackendForVkTurnRestore(
+        Context context,
+        BackendType previousBackendType,
+        BackendType backendType
+    ) {
+        if (previousBackendType == null || previousBackendType == backendType) {
+            return;
+        }
+        if (backendType.usesTurnProxy() && !previousBackendType.usesTurnProxy()) {
+            ActiveProbingManager.setRestoreBackend(context, previousBackendType);
+        } else if (!backendType.usesTurnProxy() && previousBackendType.usesTurnProxy()) {
+            ActiveProbingManager.clearRestoreBackend(context);
+        }
     }
 
     public static XraySettings getXraySettings(Context context) {

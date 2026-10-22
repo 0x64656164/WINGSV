@@ -6,7 +6,6 @@ import android.text.TextUtils;
 import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
 import java.util.Locale;
-import wings.v.core.ActiveProbingManager;
 import wings.v.core.AppPrefs;
 import wings.v.core.BackendType;
 import wings.v.core.XrayStore;
@@ -100,7 +99,9 @@ public final class ExternalActions {
         BackendType currentBackend = XrayStore.getBackendType(appContext);
         boolean changed = currentBackend != targetBackend;
         if (changed) {
-            ActiveProbingManager.clearRestoreBackend(appContext);
+            // XrayStore records the source backend when the switch lands on a TURN
+            // backend, so the auto-restore target is no longer cleared here: a
+            // relay-to-relay change must keep the pre-TURN backend it will return to.
             XrayStore.setBackendType(appContext, targetBackend);
         }
         if (changed && reconnectIfActive && ProxyTunnelService.isActive()) {

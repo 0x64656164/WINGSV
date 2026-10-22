@@ -1671,7 +1671,6 @@ public final class AppPrefs {
             importedConfig.backendType != null ? importedConfig.backendType : BackendType.VK_TURN_WIREGUARD;
         if (backendType.usesXrayCore() && importedConfig.xrayMergeOnly) {
             mergeImportedXrayPayload(context, importedConfig);
-            ActiveProbingManager.clearRestoreBackend(context);
             if (shouldActivateImportedXrayPayload(importedConfig)) {
                 XrayStore.setBackendType(
                     context,
@@ -1798,7 +1797,6 @@ public final class AppPrefs {
         }
 
         if (importedConfig.updateBackendType) {
-            ActiveProbingManager.clearRestoreBackend(context);
             XrayStore.setBackendType(context, backendType);
         }
     }

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.os.Process;
 import android.text.TextUtils;
@@ -21,10 +22,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import libXray.DialerController;
 import libXray.LibXray;
-import libXray.UIDLookupController;
+import libXray.ProcessFinder;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import wings.v.R;
 import wings.v.WingsApplication;
+import wings.v.core.XrayStore;
 import wings.v.service.XrayVpnService;
 
 @SuppressWarnings(
@@ -50,7 +53,7 @@ import wings.v.service.XrayVpnService;
 public final class XrayBridge {
 
     /** Версия контракта libXray. Библиотека отбивает запрос с чужой */
-    private static final int LIBXRAY_API_VERSION = 1;
+    private static final int LIBXRAY_API_VERSION = 3;
 
     private static final AtomicBoolean LOADED = new AtomicBoolean();
     private static final AtomicBoolean RUNTIME_STARTED = new AtomicBoolean();
@@ -66,6 +69,9 @@ public final class XrayBridge {
         DIRECT_NETWORK_CONTROLLER
     );
     private static final AtomicReference<Context> UID_LOOKUP_CONTEXT = new AtomicReference<>();
+    private static final String UDP_NETWORK = "udp";
+    private static final int IPPROTO_TCP = 6;
+    private static final int IPPROTO_UDP = 17;
     private static final java.util.concurrent.atomic.AtomicLong UID_LOOKUP_CALLS =
         new java.util.concurrent.atomic.AtomicLong();
 
@@ -80,79 +86,77 @@ public final class XrayBridge {
         } catch (Exception ignored) {}
     }
 
-    private static final UIDLookupController UID_LOOKUP_CONTROLLER = new UIDLookupController() {
+    // Ядро спрашивает владельца соединения, чтобы правила роутинга с полем
+    // process выбирали приложения по UID. На андроиде без рута это умеет
+    // только getConnectionOwnerUid, и он же единственный видит соединения,
+    // которые идут через наш же туннель
+    private static final ProcessFinder PROCESS_FINDER = new ProcessFinder() {
         @Override
-        public int lookupConnectionUID(long protocol, String local, String remote) {
+        public long findProcessByConnection(String network, String srcIP, long srcPort, String destIP, long destPort) {
             long callIndex = UID_LOOKUP_CALLS.incrementAndGet();
             Context context = UID_LOOKUP_CONTEXT.get();
             if (context == null) {
                 if (callIndex % 16 == 1) {
                     diagAppend(null, "no-context #" + callIndex);
                 }
-                return -1;
+                return -1L;
             }
             ConnectivityManager cm = context.getSystemService(ConnectivityManager.class);
             if (cm == null) {
                 if (callIndex % 16 == 1) {
                     diagAppend(context, "no-cm #" + callIndex);
                 }
-                return -1;
+                return -1L;
             }
             try {
-                InetSocketAddress localAddr = parseHostPort(local);
-                InetSocketAddress remoteAddr = parseHostPort(remote);
-                if (localAddr == null || remoteAddr == null) {
+                InetSocketAddress local = socketAddress(srcIP, srcPort);
+                InetSocketAddress remote = socketAddress(destIP, destPort);
+                if (local == null || remote == null) {
                     if (callIndex % 16 == 1) {
-                        diagAppend(context, "parse-fail local=" + local + " remote=" + remote + " #" + callIndex);
+                        diagAppend(context, "parse-fail " + srcIP + ":" + srcPort + " -> " + destIP + ":" + destPort);
                     }
-                    return -1;
+                    return -1L;
                 }
-                int uid = cm.getConnectionOwnerUid((int) protocol, localAddr, remoteAddr);
-                // Log every call to see the full distribution of UIDs that
-                // the API surfaces. If a known bypass-app UID (e.g. termux
-                // 10316) ever appears here, the API can see it and the
-                // filter just needs to fire correctly. If we only ever see
-                // our own UID (wings.v) and -1, the API hides per-app-VPN
-                // excluded apps and we need a different mechanism.
+                int protocol = UDP_NETWORK.equals(network) ? IPPROTO_UDP : IPPROTO_TCP;
+                int uid = cm.getConnectionOwnerUid(protocol, local, remote);
                 if (uid != Process.INVALID_UID || callIndex < 200) {
                     diagAppend(
                         context,
-                        "lookup #" + callIndex + " proto=" + protocol + " " + local + " -> " + remote + " uid=" + uid
+                        "lookup #" +
+                            callIndex +
+                            " " +
+                            network +
+                            " " +
+                            srcIP +
+                            ":" +
+                            srcPort +
+                            " -> " +
+                            destIP +
+                            ":" +
+                            destPort +
+                            " uid=" +
+                            uid
                     );
                 }
-                return uid == Process.INVALID_UID ? -1 : uid;
+                return uid == Process.INVALID_UID ? -1L : uid;
             } catch (SecurityException error) {
                 diagAppend(context, "denied: " + error.getMessage());
-                return -1;
+                return -1L;
             } catch (RuntimeException error) {
                 if (callIndex % 16 == 1) {
                     diagAppend(context, "exception #" + callIndex + ": " + error);
                 }
-                return -1;
+                return -1L;
             }
         }
     };
 
-    private static InetSocketAddress parseHostPort(String hostPort) {
-        if (TextUtils.isEmpty(hostPort)) return null;
-        // Go's netip.AddrPort.String() format: IPv4 "1.2.3.4:567", IPv6
-        // "[::1]:567". Split on the last colon outside any brackets so the
-        // colons inside the IPv6 part are not treated as separators.
-        int closeBracket = hostPort.lastIndexOf(']');
-        int portColon = hostPort.lastIndexOf(':');
-        if (portColon < 0 || portColon < closeBracket) return null;
-        String host = hostPort.substring(0, portColon);
-        if (host.startsWith("[") && host.endsWith("]")) {
-            host = host.substring(1, host.length() - 1);
-        }
-        int port;
-        try {
-            port = Integer.parseInt(hostPort.substring(portColon + 1));
-        } catch (NumberFormatException ignored) {
+    private static InetSocketAddress socketAddress(String ip, long port) {
+        if (TextUtils.isEmpty(ip) || port < 0L || port > 65535L) {
             return null;
         }
         try {
-            return new InetSocketAddress(InetAddress.getByName(host), port);
+            return new InetSocketAddress(InetAddress.getByName(ip), (int) port);
         } catch (UnknownHostException ignored) {
             return null;
         }
@@ -254,27 +258,39 @@ public final class XrayBridge {
             // запроса: ядро читает их, пока поднимает inbound
             LibXray.setAssetDir(datDir.getAbsolutePath());
             LibXray.setTunFd(tunFd);
+            // Окно ожидания берётся из настроек, а UID приложений могли
+            // поменяться с прошлого запуска, поэтому резолвер переставляется
+            // на каждый старт - заодно сбрасывается его кеш
+            registerUidProcessFinder(context);
             JSONObject payload = new JSONObject();
-            payload.put("configJSON", configJson);
-            invoke("runXrayFromJson", payload);
+            payload.put("xrayJson", configJson);
+            invoke("runXray", payload);
             RUNTIME_STARTED.set(true);
         }
     }
 
-    public static long pingConfig(Context context, File configFile, int timeoutSeconds, String url, String proxy)
-        throws Exception {
+    public static long pingConfig(Context context, String configJson, int timeoutSeconds, String url) throws Exception {
         ensureLoaded();
         synchronized (JNI_LOCK) {
             File datDir = ensureDatDir(context);
             LibXray.setAssetDir(datDir.getAbsolutePath());
+            // Ядро само поднимает инстанс и ходит через указанный outbound, так что
+            // локальный socks под замер не нужен
+            JSONObject item = new JSONObject();
+            item.put("xrayJson", configJson);
+            item.put("outboundTag", XrayAutoSearchConfigFactory.PROXY_TAG);
             JSONObject payload = new JSONObject();
-            payload.put("configPath", configFile.getAbsolutePath());
+            payload.put("configs", new JSONArray().put(item));
             payload.put("timeout", timeoutSeconds);
             payload.put("url", url);
-            payload.put("proxy", proxy);
-            JSONObject response = invoke("ping", payload);
+            JSONObject response = invoke("pingBatch", payload);
             JSONObject data = response.optJSONObject("data");
-            return data == null ? 0L : data.optLong("delay", 0L);
+            JSONArray results = data == null ? null : data.optJSONArray("results");
+            JSONObject result = results == null || results.length() == 0 ? null : results.optJSONObject(0);
+            if (result == null || !result.optBoolean("success", false)) {
+                return 0L;
+            }
+            return result.optLong("delay", 0L);
         }
     }
 
@@ -381,10 +397,8 @@ public final class XrayBridge {
     }
 
     /**
-     * Public hook for one-time warmup of the native library, typically
-     * called from ProxyTunnelService.onCreate on a background thread so
-     * the JNI link + Go runtime init happen off the user-perceived start
-     * path. Cheap no-op on repeat calls.
+     * Gets the JNI link and the Go runtime init off the start path - callers do this on a
+     * background thread long before the first real call. No-op once loaded
      */
     public static void warmupRuntimeLoad() {
         ensureLoaded();
@@ -394,29 +408,31 @@ public final class XrayBridge {
         if (CONTROLLERS_REGISTERED.compareAndSet(false, true)) {
             LibXray.registerDialerController(DELEGATING_CONTROLLER);
             LibXray.registerListenerController(DELEGATING_CONTROLLER);
-            LibXray.registerUIDLookupController(UID_LOOKUP_CONTROLLER);
+            registerUidProcessFinder(UID_LOOKUP_CONTEXT.get());
         }
     }
 
     /**
-     * Sets the application context used by {@link #UID_LOOKUP_CONTROLLER} to
-     * obtain {@link ConnectivityManager#getConnectionOwnerUid}. The context
-     * is stored as a static reference; pass an Application context to avoid
-     * Activity leaks.
+     * Context for {@link ConnectivityManager#getConnectionOwnerUid}. Held in a static, so
+     * pass an Application context unless you want to leak an Activity
      */
     public static void setUidLookupContext(Context applicationContext) {
         UID_LOOKUP_CONTEXT.set(applicationContext);
-        try {
-            File diagFile = new File(applicationContext.getFilesDir(), "uid-diag-go.log");
-            // Empty the file so each process restart begins fresh; the Go
-            // side opens with O_APPEND.
-            try (FileOutputStream out = new FileOutputStream(diagFile, false)) {
-                out.write(
-                    ("=== go-diag init " + System.currentTimeMillis() + " ===\n").getBytes(StandardCharsets.UTF_8)
-                );
+        registerUidProcessFinder(applicationContext);
+    }
+
+    // Окно ожидания живёт в настройках, а регистрация идемпотентна, поэтому
+    // резолвер переставляется заново, как только контекст появился
+    private static void registerUidProcessFinder(Context context) {
+        int lookupTimeoutMs = 0;
+        if (context != null) {
+            try {
+                lookupTimeoutMs = XrayStore.getXraySettings(context).tunUidLookupTimeoutMs;
+            } catch (Exception ignored) {
+                lookupTimeoutMs = 0;
             }
-            LibXray.setUIDLookupDiagPath(diagFile.getAbsolutePath());
-        } catch (Exception ignored) {}
+        }
+        LibXray.registerUIDProcessFinder(PROCESS_FINDER, Build.VERSION.SDK_INT, lookupTimeoutMs);
     }
 
     private static String trim(String value) {
@@ -425,7 +441,7 @@ public final class XrayBridge {
 
     /**
      * Один вызов в libXray. Библиотека свела всё к единственной двери, куда едет
-     * имя метода и его данные, поэтому обёртка тут одна на всех.
+     * имя метода и его данные, поэтому обёртка тут одна на всех
      */
     private static JSONObject invoke(String method, JSONObject payload) throws Exception {
         JSONObject request = new JSONObject();

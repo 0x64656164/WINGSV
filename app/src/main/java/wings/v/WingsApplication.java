@@ -14,6 +14,7 @@ import wings.v.core.ActiveProbingBackgroundScheduler;
 import wings.v.core.AppPrefs;
 import wings.v.core.AppUpdateBackgroundScheduler;
 import wings.v.core.ThemeModeController;
+import wings.v.core.XrayRoutingGeoScheduler;
 import wings.v.core.XraySubscriptionBackgroundScheduler;
 import wings.v.service.ProxyTunnelService;
 import wings.v.service.RuntimeStateStore;
@@ -57,7 +58,13 @@ public class WingsApplication extends Application {
         wings.v.service.ProxyTunnelService.cleanStaleRootRoutingOnLaunch(this);
         // Аватар греем сразу: без этого первый показ на каждом экране лезет в
         // сеть, и человек успевает увидеть пустой кружок вместо своего лица
-        wings.v.core.AvatarFetcher.warmUp(this, wings.v.core.FederationAccount.avatarUrl(this));
+        wings.v.core.AvatarFetcher.warmUp(
+            this,
+            wings.v.core.AvatarFetcher.sized(
+                wings.v.core.FederationAccount.avatarUrl(this),
+                wings.v.core.AvatarFetcher.SIZE_SMALL
+            )
+        );
         registerActivityLifecycleCallbacks(
             new ActivityLifecycleCallbacks() {
                 @Override
@@ -74,7 +81,11 @@ public class WingsApplication extends Application {
                 }
 
                 @Override
-                public void onActivityResumed(@NonNull Activity activity) {}
+                public void onActivityResumed(@NonNull Activity activity) {
+                    // Не в onCreate: там окно ещё не прицеплено, и наблюдатель за
+                    // разметкой выкидывается вместе с временным деревом нахуй
+                    wings.v.core.TvFocus.attach(activity);
+                }
 
                 @Override
                 public void onActivityPaused(@NonNull Activity activity) {}
@@ -103,6 +114,7 @@ public class WingsApplication extends Application {
         AppUpdateBackgroundScheduler.schedule(this);
         ActiveProbingBackgroundScheduler.refresh(this);
         XraySubscriptionBackgroundScheduler.refresh(this);
+        XrayRoutingGeoScheduler.refresh(this);
     }
 
     // Android forbids a WebView in two processes sharing one data directory

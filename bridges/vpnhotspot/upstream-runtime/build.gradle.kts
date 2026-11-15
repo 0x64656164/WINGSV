@@ -118,15 +118,13 @@ android {
 // the subset of VPNHotspot mobile sources we need, copy them into a generated
 // directory and feed that to variant.sources.java via the new
 // androidComponents API.
-val mobileSourceRoot = layout.projectDirectory.dir("../../external/VPNHotspot/mobile/src/main/java")
-val mobileResRoot = layout.projectDirectory.dir("../../external/VPNHotspot/mobile/src/main/res")
+val mobileSourceRoot = layout.projectDirectory.dir("../../../external/VPNHotspot/mobile/src/main/java")
+val mobileResRoot = layout.projectDirectory.dir("../../../external/VPNHotspot/mobile/src/main/res")
 val mobileIncludedSources = listOf(
     "be/mygod/vpnhotspot/RoutingManager.kt",
     "be/mygod/vpnhotspot/io/Utils.kt",
     "be/mygod/vpnhotspot/net/InetAddressComparator.kt",
-    "be/mygod/vpnhotspot/net/IpSecForwardPolicyCommand.kt",
     "be/mygod/vpnhotspot/net/MacAddressCompat.kt",
-    "be/mygod/vpnhotspot/net/Netd.kt",
     "be/mygod/vpnhotspot/net/NetlinkNeighbour.kt",
     "be/mygod/vpnhotspot/net/Routing.kt",
     "be/mygod/vpnhotspot/net/TetherOffloadManager.kt",
@@ -136,17 +134,17 @@ val mobileIncludedSources = listOf(
     "be/mygod/vpnhotspot/net/monitor/TetherTimeoutMonitor.kt",
     "be/mygod/vpnhotspot/net/monitor/TrafficRecorder.kt",
     "be/mygod/vpnhotspot/net/monitor/Upstreams.kt",
-    "be/mygod/vpnhotspot/net/wifi/SoftApCapability.kt",
     "be/mygod/vpnhotspot/net/wifi/SoftApConfigurationCompat.kt",
     "be/mygod/vpnhotspot/net/wifi/SoftApInfo.kt",
     "be/mygod/vpnhotspot/net/wifi/WifiApManager.kt",
     "be/mygod/vpnhotspot/net/wifi/WifiClient.kt",
     "be/mygod/vpnhotspot/net/wifi/WifiDoubleLock.kt",
     "be/mygod/vpnhotspot/net/wifi/WifiSsidCompat.kt",
+    "be/mygod/vpnhotspot/root/IpSecForwardPolicyCommand.kt",
     "be/mygod/vpnhotspot/root/MiscCommands.kt",
+    "be/mygod/vpnhotspot/root/Netd.kt",
     "be/mygod/vpnhotspot/root/RootManager.kt",
     "be/mygod/vpnhotspot/root/TetheringCommands.kt",
-    "be/mygod/vpnhotspot/root/daemon/ClientConfig.kt",
     "be/mygod/vpnhotspot/root/daemon/DaemonAbi.kt",
     "be/mygod/vpnhotspot/root/daemon/DaemonCommands.kt",
     "be/mygod/vpnhotspot/root/daemon/DaemonController.kt",
@@ -192,8 +190,8 @@ androidComponents {
             ?.maxByOrNull { it.name }
             ?: error("No Android NDK installed under $ndkParent")
         val daemonTask = tasks.register<BuildDaemonNativeLibsTask>("build${variantTitle}DaemonNativeLibs") {
-            sourceDir.set(layout.projectDirectory.dir("../../external/VPNHotspot/mobile/src/main/rust/vpnhotspotd"))
-            protoDir.set(layout.projectDirectory.dir("../../external/VPNHotspot/mobile/src/main/proto"))
+            sourceDir.set(layout.projectDirectory.dir("../../../external/VPNHotspot/mobile/src/main/rust/vpnhotspotd"))
+            protoDir.set(layout.projectDirectory.dir("../../../external/VPNHotspot/mobile/src/main/proto"))
             cargoProfile.set(if (variant.buildType == "release") "release" else "debug")
             androidPlatform.set(29)
             outputDir.set(layout.buildDirectory.dir("generated/nativeLibs/daemon/${variant.name}"))
@@ -223,13 +221,13 @@ wire {
         rpcRole = "none"
     }
     sourcePath {
-        srcDir("../../external/VPNHotspot/mobile/src/main/proto")
+        srcDir("../../../external/VPNHotspot/mobile/src/main/proto")
     }
 }
 
 val hiddenApiStubAnnotations by configurations.creating
 val compileHiddenApiStubs by tasks.registering(JavaCompile::class) {
-    source("../../external/VPNHotspot/mobile/src/hiddenApiStubs/java")
+    source("../../../external/VPNHotspot/mobile/src/hiddenApiStubs/java")
     classpath = files(androidComponents.sdkComponents.bootClasspath) + hiddenApiStubAnnotations
     destinationDirectory.set(layout.buildDirectory.dir("intermediates/hiddenApiStubs/classes"))
     sourceCompatibility = "11"

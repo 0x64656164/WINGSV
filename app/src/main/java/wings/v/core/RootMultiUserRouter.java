@@ -17,25 +17,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Installs ip-rules that make kernel-WireGuard pick up traffic from all active
- * Android users (primary account + work profile + secondary users), while
- * honouring the per-app bypass list configured in the primary user's WINGSV.
+ * Заворачивает в kernel-WireGuard трафик всех заведённых на телефоне
+ * пользователей - основного, рабочего профиля и прочих, - не ломая при этом
+ * список исключённых приложений.
  *
- * <p>Android lays out per-user UIDs as {@code userId * 100000 + appId}. So an
- * app with appId 10142 in the primary user (UID 10142) gets UID 1010142 in
- * user 10, UID 1110142 in user 11 and so on. Without explicit ip-rules, netd
- * may route secondary users through their own routing table that does not
- * carry the wg route, and their traffic silently skips the tunnel.
- *
- * <p>Modes mirror {@link AppPrefs#isAppRoutingBypassEnabled(Context)}:
- * <ul>
- *   <li>{@link Mode#BYPASS}: by default everyone in the user range goes via
- *       the wg table; selected packages are routed via {@code main} to bypass
- *       the tunnel.</li>
- *   <li>{@link Mode#ONLY_SELECTED}: by default everyone in the user range
- *       stays on {@code main}; only the selected packages are diverted to the
- *       wg table.</li>
- * </ul>
+ * <p>UID второго пользователя считается как {@code userId * 100000 + appId}:
+ * приложение с 10142 у основного превращается в 1010142 у десятого. Не
+ * прописать такие правила руками - и netd уведёт их в свою таблицу, где нашего
+ * маршрута нет, а трафик молча пойдёт мимо туннеля
  */
 public final class RootMultiUserRouter {
 
@@ -220,10 +209,10 @@ public final class RootMultiUserRouter {
     /**
      * Same as {@link #applyFilterOnly(Context, String, Mode, Set, List)} but
      * with bypassEntersTun=true the BYPASS-direction REJECT against tun is
-     * skipped. Use it when the userspace VPN backend (Xray gVisor) needs all
+     * skipped. Use it when the userspace VPN backend (Xray TUN) needs all
      * apps - including bypass UIDs - to enter the tun device so it can divert
      * bypass connections at the stack level. Without this, iptables drops the
-     * packet before gVisor sees it and bypass apps lose all connectivity.
+     * packet before the TUN stack sees it and bypass apps lose all connectivity.
      */
     public static void applyFilterOnly(
         @NonNull Context context,
@@ -411,7 +400,7 @@ public final class RootMultiUserRouter {
             // Блок 1: пакеты, идущие через tun. REJECT для тех, кто не должен
             // туда ходить, RETURN для остальных - чтобы блок 2 их уже не трогал.
             // bypassEntersTun=true пропускает блок 1 для BYPASS: пакеты bypass-
-            // UID должны войти в tun, чтобы userspace VPN backend (gVisor)
+            // UID должны войти в tun, чтобы userspace VPN backend (TUN)
             // перехватил их и редиректнул на freedom outbound.
             if (hasTun) {
                 if (mode == Mode.BYPASS && !bypassEntersTun) {

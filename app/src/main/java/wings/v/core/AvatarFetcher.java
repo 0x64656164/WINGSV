@@ -31,6 +31,15 @@ public final class AvatarFetcher {
     /** Потолок стороны: кружок в профиле крупный, и мелкая картинка на нём мылит */
     private static final int MAX_SIZE_PX = 512;
 
+    /** Иконка в тулбаре и строках списка */
+    public static final int SIZE_SMALL = 64;
+
+    /** Карточка аккаунта */
+    public static final int SIZE_CARD = 128;
+
+    /** Экран профиля, где кружок во всю ширину */
+    public static final int SIZE_FULL = 460;
+
     /**
      * Ревизия кэша стоит в имени файла и растёт вместе с MAX_SIZE_PX: иначе на
      * диске лежит картинка, ужатая под старый потолок, и её подсовывают вместо
@@ -40,7 +49,7 @@ public final class AvatarFetcher {
 
     /**
      * Последняя картинка держится в памяти: иначе каждый экран открывается с
-     * человечком и подменяет его через сеть или диск.
+     * человечком и подменяет его через сеть или диск
      */
     private static volatile String memoryKey = "";
 
@@ -48,6 +57,18 @@ public final class AvatarFetcher {
     private static volatile Bitmap memoryBitmap;
 
     private AvatarFetcher() {}
+
+    /**
+     * Дописывает к адресу нужный размер. Панель режет картинку заранее и отдаёт
+     * копию не меньше запрошенной, так что в тулбар не едет мегабайтное фото
+     */
+    @NonNull
+    public static String sized(@NonNull String url, int px) {
+        if (url.isEmpty() || px <= 0 || url.contains("s=")) {
+            return url;
+        }
+        return url + (url.indexOf('?') < 0 ? '?' : '&') + "s=" + px;
+    }
 
     /** Готовая картинка для этого адреса, если она уже загружена */
     @Nullable
@@ -60,7 +81,7 @@ public final class AvatarFetcher {
      *
      * <p>Ключ кэша - сам адрес: версия картинки уже стоит в нём параметром, и
      * обновление аватара в панели меняет адрес. Прошлые версии удаляются, чтобы
-     * кэш не рос с каждой сменой.
+     * кэш не рос с каждой сменой
      */
     @Nullable
     public static Bitmap cached(@NonNull Context context, @NonNull String url) {
@@ -119,7 +140,7 @@ public final class AvatarFetcher {
      * Греет кэш заранее, в фоне.
      *
      * <p>Без прогрева первый показ после запуска всегда лезет в сеть, и человек
-     * успевает увидеть пустой кружок на каждом экране, где аватар есть.
+     * успевает увидеть пустой кружок на каждом экране, где аватар есть
      */
     public static void warmUp(@NonNull Context context, @NonNull String url) {
         if (url.isEmpty() || fromMemory(url) != null) {
@@ -146,7 +167,7 @@ public final class AvatarFetcher {
      * Возвращает картинку или null, когда панель недоступна.
      *
      * <p>Причина неудачи пишется в лог: молчаливый null неотличим от "аватара
-     * нет", и разбираться, почему у человека пустой кружок, потом не по чему.
+     * нет", и разбираться, почему у человека пустой кружок, потом не по чему
      */
     @Nullable
     public static Bitmap fetch(@NonNull Context context, @NonNull String url) {
@@ -166,8 +187,8 @@ public final class AvatarFetcher {
                     Log.w(TAG, "avatar fetch failed: body is not an image, " + url);
                     return null;
                 }
-                // Растягивать мелкий исходник незачем: апскейл только мылит.
-                // Уменьшается лишь то, что крупнее нужного
+                // Растягивать мелкий исходник незачем, апскейл только мылит:
+                // уменьшается лишь то, что крупнее нужного
                 int side = Math.max(decoded.getWidth(), decoded.getHeight());
                 if (side <= MAX_SIZE_PX) {
                     return decoded;

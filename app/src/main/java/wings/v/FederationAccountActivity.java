@@ -51,7 +51,7 @@ public class FederationAccountActivity extends AppCompatActivity {
      * Сканер подтверждения входа: телефон впускает компьютер.
      *
      * <p>Код показывает тот, кто хочет войти, а решает тот, кто уже вошёл. Поэтому
-     * сканируем здесь, а вход происходит там - на компьютере.
+     * сканируем здесь, а вход происходит там - на компьютере
      */
     private final ActivityResultLauncher<Intent> approveScan = registerForActivityResult(
         new ActivityResultContracts.StartActivityForResult(),
@@ -92,6 +92,13 @@ public class FederationAccountActivity extends AppCompatActivity {
 
     public static Intent createIntent(@NonNull Context context) {
         return new Intent(context, FederationAccountActivity.class);
+    }
+
+    /** Открыть экран сразу с подтверждением входа: ссылку поймал чужой сканер */
+    public static Intent createApprove(@NonNull Context context, @NonNull String link) {
+        Intent intent = new Intent(context, FederationAccountActivity.class);
+        intent.setData(Uri.parse(link));
+        return intent;
     }
 
     @Override
@@ -167,6 +174,11 @@ public class FederationAccountActivity extends AppCompatActivity {
             String invite = wings.v.core.InviteCode.parse(data.toString());
             if (invite != null) {
                 applyInvite(invite);
+                return;
+            }
+            String signIn = signInCodeOf(data.toString());
+            if (signIn != null) {
+                askToApprove(signIn);
                 return;
             }
         }
@@ -275,7 +287,7 @@ public class FederationAccountActivity extends AppCompatActivity {
      *
      * <p>Порядок именно такой, потому что панель переезжает на общий вход: у
      * переехавшего свой пароль больше не работает, и спрашивать человека, какую
-     * дверь он хочет, это перекладывать нашу кухню на него.
+     * дверь он хочет, это перекладывать нашу кухню на него
      */
     private FederationAccount.Session signInEitherDoor(String user, String pass, String secondFactor) throws Exception {
         if (!TextUtils.isEmpty(accountTicket)) {
@@ -301,15 +313,7 @@ public class FederationAccountActivity extends AppCompatActivity {
     /** Ссылка входа вида panel/link/CODE. Чужой QR сюда попасть не должен */
     @Nullable
     private String signInCodeOf(@Nullable String scanned) {
-        if (TextUtils.isEmpty(scanned)) {
-            return null;
-        }
-        String prefix = FederationAccount.panelUrl(this) + "/link/";
-        if (!scanned.startsWith(prefix)) {
-            return null;
-        }
-        String code = scanned.substring(prefix.length()).trim();
-        return TextUtils.isEmpty(code) ? null : code;
+        return FederationAccount.signInCode(this, scanned);
     }
 
     /** Показываем, кого впускаем: QR со стороны это чужой QR */
@@ -399,7 +403,7 @@ public class FederationAccountActivity extends AppCompatActivity {
 
     /** Аватар грузится отдельно: без него экран уже полный, с ним - живой */
     private void loadAvatar() {
-        String url = FederationAccount.avatarUrl(this);
+        String url = AvatarFetcher.sized(FederationAccount.avatarUrl(this), AvatarFetcher.SIZE_FULL);
         if (TextUtils.isEmpty(url)) {
             return;
         }

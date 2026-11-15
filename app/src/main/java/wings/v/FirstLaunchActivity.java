@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.TypedValue;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.animation.PathInterpolator;
 import android.widget.Toast;
@@ -25,6 +26,8 @@ import androidx.viewpager2.widget.ViewPager2;
 import wings.v.core.AppPrefs;
 import wings.v.core.AutoSearchManager;
 import wings.v.core.Haptics;
+import wings.v.core.TvFocus;
+import wings.v.core.TvMode;
 import wings.v.databinding.ActivityFirstLaunchBinding;
 import wings.v.ui.FirstLaunchPagerAdapter;
 
@@ -106,9 +109,8 @@ public class FirstLaunchActivity
     }
 
     /**
-     * Variant that plays the intro music ({@code samsung_tv_over_the_horizon}).
-     * Used only by the easter-egg 5x-tap on the About screen - regular onboarding
-     * launches stay silent.
+     * Variant with the intro music ({@code samsung_tv_over_the_horizon}). Only the
+     * easter-egg 5x-tap on the About screen uses it; regular onboarding stays silent
      */
     public static Intent createIntentWithMusic(Context context) {
         return new Intent(context, FirstLaunchActivity.class).putExtra(EXTRA_PLAY_INTRO_MUSIC, true);
@@ -218,8 +220,8 @@ public class FirstLaunchActivity
         if (exitTransitionRunning) {
             return;
         }
-        // Imported a wingsv:// / vless:// / subscription / awg-quick - config is
-        // already in prefs, no further setup needed. Finish onboarding.
+        // An imported wingsv:// / vless:// / subscription / awg-quick config is
+        // already in prefs, so there is nothing left to set up
         completeFirstLaunch();
     }
 
@@ -328,6 +330,9 @@ public class FirstLaunchActivity
                 @Override
                 public void onPageSelected(int position) {
                     updateForPage(position);
+                    if (binding != null) {
+                        TvFocus.refocus(binding.firstLaunchPager);
+                    }
                 }
             }
         );
@@ -416,6 +421,12 @@ public class FirstLaunchActivity
         }
         introVideoStarted = true;
         binding.contentFirstLaunch.setAlpha(1f);
+        // Говняное железо жуёт это видео в ущерб всему остальному, и онбординг
+        // превращается в слайд-шоу. Показываем сразу содержимое
+        if (TvMode.isWeakDevice(this)) {
+            binding.videoFirstLaunchIntro.setVisibility(View.GONE);
+            return;
+        }
         binding.videoFirstLaunchIntro.setAlpha(0f);
         binding.videoFirstLaunchIntro.setZOrderOnTop(false);
         binding.videoFirstLaunchIntro.setZOrderMediaOverlay(false);
@@ -515,8 +526,8 @@ public class FirstLaunchActivity
 
     private void resumeIntroMusic() {
         if (!playIntroMusic) {
-            // По умолчанию музыки нет - она включается только при запуске
-            // через AboutAppActivity (5× тап на иконке приложения).
+            // По умолчанию музыки нет: она включается только при запуске через
+            // AboutAppActivity, 5 тапов по иконке приложения
             return;
         }
         if (!requestIntroAudioFocus()) {
@@ -652,6 +663,37 @@ public class FirstLaunchActivity
         }
         Haptics.softConfirm(binding.firstLaunchPager);
         animateToPage(currentPage + 1);
+    }
+
+    /**
+     * Свайпа на пульте нет, и онбординг встаёт колом на первой странице.
+     * Листаем только с пустым фокусом, иначе отберём крестовину у кнопок
+     */
+    @Override
+    public boolean dispatchKeyEvent(@NonNull KeyEvent event) {
+        View focused = getCurrentFocus();
+        boolean someoneTookIt = focused != null && TvFocus.isWorthFocusing(focused);
+        if (
+            event.getAction() != KeyEvent.ACTION_DOWN || binding == null || someoneTookIt || !TvMode.isTelevision(this)
+        ) {
+            return super.dispatchKeyEvent(event);
+        }
+        int page = binding.firstLaunchPager.getCurrentItem();
+        switch (event.getKeyCode()) {
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_BUTTON_A:
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                onOnboardingCompleted();
+                return true;
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+                if (page > 0) {
+                    animateToPage(page - 1);
+                }
+                return true;
+            default:
+                return super.dispatchKeyEvent(event);
+        }
     }
 
     private void animateToPage(int targetPage) {

@@ -1,6 +1,7 @@
 package wings.v.core;
 
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.text.TextUtils;
 import android.util.Log;
 import androidx.annotation.NonNull;
@@ -36,14 +37,13 @@ public final class XrayTproxyRouter {
     private static final String TAG = "XrayTproxyRouter";
     public static final int FWMARK = 0x1;
     public static final int ROUTE_TABLE = 100;
-    // Routing rule priority. Must beat Android per-network and per-UID rules,
-    // which live at 10000-22000 (per-network around 14000, secure VPN 12000,
-    // tethering 18000). Without an explicit pref, our rule slots wherever
-    // iproute2 sees fit and per-UID rules end up steering our marked DNS
-    // packets through the underlying wlan0/rmnet anyway. 13999 sits just
-    // before the per-UID fleet (14000+) and after secure-VPN (12000-13000),
-    // and unlike sub-10000 values the Knox/SELinux audit on some Samsung ROMs
-    // does not SIGKILL the helper for touching it.
+    // Приоритет правила маршрутизации. Должен бить андроидные правила на сеть
+    // и на UID - те сидят в 10000-22000 (сеть около 14000, secure VPN 12000,
+    // раздача 18000). Без явного числа iproute2 сунет наше правило куда ему
+    // вздумается, и правила на UID всё равно утащат наши помеченные DNS-пакеты
+    // в wlan0/rmnet. 13999 встаёт впритык перед стаей UID-правил и после
+    // secure-VPN, а в отличие от значений ниже 10000 за него не прилетает
+    // SIGKILL от Knox/SELinux на самсунговских прошивках
     private static final int RULE_PRIORITY = 13999;
     private static final String CHAIN_PRE = "WINGS_XRAY_TP_PRE";
     private static final String CHAIN_OUT = "WINGS_XRAY_TP_OUT";
@@ -51,20 +51,19 @@ public final class XrayTproxyRouter {
     private static final String CHAIN_OUT6 = "WINGS_XRAY_TP_OUT6";
     private static final String CHAIN_REDIR = "WINGS_XRAY_REDIR";
     private static final String CHAIN_FWD = "WINGS_XRAY_TP_FWD";
-    // -w 5 - wait up to 5 seconds for the kernel xtables lock so that parallel
-    // iptables invocations from vpnhotspot / ConnectivityService / system tether
-    // helpers don't collide with ours and trip "lock xtables already used by
-    // another app". Without this the chain ends up half-built and Xray loses
-    // its inbound traffic, which manifests as an endless upstream-reconnect.
+    // -w 5 - ждём ядерный xtables-лок до пяти секунд. Параллельно в iptables
+    // лезут vpnhotspot, ConnectivityService и системные хелперы раздачи, и без
+    // ожидания цепочка собирается наполовину, Xray остаётся без входящего
+    // трафика, а наружу это вылезает бесконечным переподключением
     private static final String IPT4 = "iptables -w 5";
     private static final String IPT6 = "ip6tables -w 5";
 
     private XrayTproxyRouter() {}
 
     /**
-     * Name of the device tproxy PREROUTING mangle chain the forwarded carve-out jumps
-     * into. Exposed so the daemon path can name the same chain the su path builds,
-     * rather than the two hardcoding it apart.
+     * Имя mangle-цепочки PREROUTING, в которую прыгает карве-аут форварда.
+     * Наружу торчит затем, чтобы демон и su-путь звали одну и ту же цепочку,
+     * а не хардкодили её каждый по-своему
      */
     public static String tproxyPreChain() {
         return CHAIN_PRE;
@@ -77,9 +76,10 @@ public final class XrayTproxyRouter {
     }
 
     /**
-     * Detects whether {@code -m owner --uid-owner} matches packets in the OUTPUT mangle chain.
-     * Some Android kernels/iptables flavours strip the owner match for UDP, or only match in
-     * specific tables. Caller may downgrade to AppRoutingMode.NONE on failure.
+     * Проверяет, ловит ли {@code -m owner --uid-owner} пакеты в mangle OUTPUT.
+     * Часть андроидных ядер и сборок iptables выкидывает owner-матч для UDP или
+     * признаёт его только в своих таблицах. Не сработало - зовущий откатывается
+     * на AppRoutingMode.NONE
      */
     public static boolean isUidOwnerMatchSupported(@NonNull Context context) {
         String probe =
@@ -118,6 +118,7 @@ public final class XrayTproxyRouter {
 
         List<String> localV4 = enumerateLocalAddresses(4);
         List<String> localV6 = enumerateLocalAddresses(6);
+        List<Integer> probeUids = resolveNetworkProbeUids(context);
 
         StringBuilder s = new StringBuilder("set -e; ");
         appendStageMarker(s, "route");
@@ -126,37 +127,37 @@ public final class XrayTproxyRouter {
         // IPv4 chains
         appendStageMarker(s, "v4_chains");
         appendChainSetup(s, IPT4, CHAIN_PRE, CHAIN_OUT);
-        // PREROUTING: drop reply traffic whose destination is one of this
-        // device's own addresses BEFORE any TPROXY/DNS rule. Without this,
-        // responses from the proxy server arriving on wlan0/rmnet (dst =
-        // our public IP) get TPROXYed back into xray, which sees them as a
-        // fresh inbound connection looping to itself and logs "loopback
-        // connection detected". The xray runtime then leaks sockets/memory
-        // until the helper hits OOM and dies with SIGKILL (exit 137).
+        // PREROUTING: ответы, адресованные нам самим, выкидываем ДО всяких
+        // TPROXY и DNS. Иначе ответ от прокси-сервера, прилетевший на
+        // wlan0/rmnet с нашим же публичным адресом, заворачивается обратно в
+        // xray, тот принимает его за новое входящее к самому себе и пишет
+        // "loopback connection detected". Дальше рантайм течёт сокетами и
+        // памятью, пока хелпер не словит OOM и не сдохнет с SIGKILL
         appendStageMarker(s, "v4_pre_localbypass");
         appendLocalAddrBypass(s, IPT4, CHAIN_PRE, localV4);
         appendStageMarker(s, "v4_pre_dns");
-        // DNS capture in PREROUTING must precede the RFC1918 dest-bypass: in
-        // TPROXY mode there is no VpnService.addDnsServer fallback, so netd
-        // queries the underlying network's DHCP DNS (typically 192.168.x.x /
-        // 10.x.x.x / 100.64.x.x), all inside the bypass list. Without this
-        // rule those queries leak out in plaintext on wlan0/rmnet. Loopback
-        // (127/8) DNS stays bypassed in the rule that follows, so on-device
-        // resolvers keep working.
+        // Перехват DNS в PREROUTING обязан стоять раньше обхода для серых
+        // подсетей. В режиме TPROXY подстраховки через VpnService.addDnsServer
+        // нет, и netd долбится в DNS, выданный по DHCP - а это как раз
+        // 192.168/10.x/100.64, всё внутри списка обхода. Без этого правила
+        // запросы утекают открытым текстом в wlan0/rmnet. Локалхостовый DNS
+        // обходится следующим правилом, так что резолверы на самом устройстве
+        // работают как работали
         appendDnsCapture(s, IPT4, CHAIN_PRE, tproxyPort, false);
         appendStageMarker(s, "v4_pre_destbypass");
         appendDestBypassV4(s, IPT4, CHAIN_PRE);
         appendStageMarker(s, "v4_pre_tproxy");
         appendTproxyRules(s, IPT4, CHAIN_PRE, tproxyPort);
         appendStageMarker(s, "v4_out_owner");
-        // OUTPUT chain: owner exclusion for UID 0 (xray) MUST run before the
-        // DNS capture rule, otherwise xray's own bootstrap UDP/53 query to
-        // 1.1.1.1 (used to resolve the DoH endpoint host) gets marked, looped
-        // back via loopback, TPROXYed back into xray, and we end up in an
-        // infinite resolution loop that breaks DoH entirely. We also do NOT
-        // exclude wings.v's own UID, so app traffic stays routed via the
-        // proxy when probing public IP endpoints.
+        // OUTPUT: исключение по owner для UID 0 (это xray) ОБЯЗАНО идти перед
+        // перехватом DNS. Иначе стартовый запрос самого xray на 1.1.1.1, которым
+        // он резолвит хост DoH, помечается, уходит через локалхост обратно в
+        // xray, и резолв зацикливается нахуй, похоронив DoH целиком. Свой UID
+        // при этом НЕ исключаем: трафик приложения должен ходить через прокси,
+        // когда оно щупает публичные адреса
         appendOwnerExclusion(s, IPT4, CHAIN_OUT, 0);
+        appendStageMarker(s, "v4_out_probes");
+        appendNetworkProbeExclusion(s, IPT4, CHAIN_OUT, probeUids);
         appendStageMarker(s, "v4_out_localbypass");
         // Same local-address bypass on OUTPUT: locally generated traffic to
         // our own IPs (e.g. localhost services, mdns, link-local) must not
@@ -184,6 +185,8 @@ public final class XrayTproxyRouter {
         appendTproxyRules(s, IPT6, CHAIN_PRE6, tproxyPort);
         appendStageMarker(s, "v6_out_owner");
         appendOwnerExclusion(s, IPT6, CHAIN_OUT6, 0);
+        appendStageMarker(s, "v6_out_probes");
+        appendNetworkProbeExclusion(s, IPT6, CHAIN_OUT6, probeUids);
         appendStageMarker(s, "v6_out_localbypass");
         appendLocalAddrBypass(s, IPT6, CHAIN_OUT6, localV6);
         appendStageMarker(s, "v6_out_dns");
@@ -236,7 +239,7 @@ public final class XrayTproxyRouter {
     // Uses iptables nat REDIRECT (not TPROXY): the destination is DNATed to the
     // box before the routing decision, so the app-uid VpnService xray receives it
     // via SO_ORIGINAL_DST without needing IP_TRANSPARENT, and the packet never
-    // reaches the gVisor TUN nor the system tether MASQUERADE. IPv4 only (shared
+    // reaches the TUN nor the system tether MASQUERADE. IPv4 only (shared
     // clients are IPv4; REDIRECT is an IPv4 nat target).
     public static void applyForwardedRedirect(
         @NonNull Context context,
@@ -295,7 +298,10 @@ public final class XrayTproxyRouter {
             // dokodemo-door followRedirect path does not survive the UDP return
             // trip, so capturing it here black-holes client name resolution; the
             // gateway resolver already answers the clients.
-            s.append(" ! --dport 53");
+            //
+            // 67 и 68 отдаём локальному DHCP точки: завёрнутый в dokodemo-door
+            // запрос до него не доходит ни хуя, и клиент сидит без адреса
+            s.append(" -m multiport ! --dports 53,67,68");
         }
         s.append(" -j REDIRECT --to-ports ").append(redirectPort).append("; ");
     }
@@ -414,6 +420,41 @@ public final class XrayTproxyRouter {
         try {
             String result = RootShellCommand.exec(context, probe);
             return result != null && result.contains("OK");
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Правила обхода своих адресов прописаны конкретными адресами, снятыми в момент
+     * применения. На переходе wifi -> rmnet адрес устройства меняется, правило со
+     * старым адресом перестаёт совпадать, и ответы сервера с dst = новый адрес
+     * уезжают обратно в tproxy: xray считает их входящим соединением к самому себе
+     * и течёт сокетами, а трафик встаёт. Цепочки при этом на месте, поэтому
+     * isFullyApplied такой дрейф не видит.
+     *
+     * IPv6 тут не сверяется: temporary-адреса приватности меняются сами собой и
+     * гоняли бы перенакат вхолостую
+     */
+    public static boolean areLocalAddressBypassesCurrent(@NonNull Context context) {
+        List<String> current = enumerateLocalAddresses(4);
+        if (current.isEmpty()) {
+            return true;
+        }
+        try {
+            String dump = RootShellCommand.exec(context, IPT4 + " -t mangle -S " + CHAIN_PRE + " 2>/dev/null; true");
+            if (dump == null) {
+                return false;
+            }
+            for (String addr : current) {
+                if (TextUtils.isEmpty(addr)) {
+                    continue;
+                }
+                if (!dump.contains(" -d " + addr + "/") && !dump.contains(" -d " + addr + " ")) {
+                    return false;
+                }
+            }
+            return true;
         } catch (Exception ignored) {
             return false;
         }
@@ -708,6 +749,47 @@ public final class XrayTproxyRouter {
 
     private static void appendBypassDest(StringBuilder s, String tool, String chain, String cidr) {
         s.append(tool).append(" -t mangle -A ").append(chain).append(" -d ").append(cidr).append(" -j RETURN; ");
+    }
+
+    // Android признаёт сеть рабочей, только когда его собственная проба уходит
+    // ИМЕННО через эту сеть и оттуда же приходит ответ. Утащив пробу в туннель,
+    // мы ломаем проверку: у Wi-Fi пропадает VALIDATED, рядом с ним загорается
+    // восклицательный знак, и система уводит трафик на мобильную сеть
+    private static final int AID_NETWORK_STACK = 1073;
+
+    // У вендоров свои пробники рядом с общим, и их uid на каждой прошивке свой -
+    // поэтому ищем по имени, а не по числу
+    private static final String[] NETWORK_PROBE_PACKAGES = {
+        "com.android.networkstack",
+        "com.google.android.networkstack",
+        "com.samsung.android.networkstack",
+        "com.samsung.android.wcmurlsnetworkstack",
+        "com.android.captiveportallogin",
+        "com.google.android.captiveportallogin",
+    };
+
+    private static List<Integer> resolveNetworkProbeUids(Context context) {
+        List<Integer> uids = new ArrayList<>();
+        uids.add(AID_NETWORK_STACK);
+        PackageManager packageManager = context.getPackageManager();
+        for (String name : NETWORK_PROBE_PACKAGES) {
+            try {
+                int uid = packageManager.getApplicationInfo(name, 0).uid;
+                if (uid > 0 && !uids.contains(uid)) {
+                    uids.add(uid);
+                }
+            } catch (Exception ignored) {}
+        }
+        return uids;
+    }
+
+    private static void appendNetworkProbeExclusion(StringBuilder s, String tool, String chain, List<Integer> uids) {
+        for (Integer uid : uids) {
+            if (uid == null || uid < 0) {
+                continue;
+            }
+            appendOwnerExclusion(s, tool, chain, uid);
+        }
     }
 
     private static void appendOwnerExclusion(StringBuilder s, String tool, String chain, int uid) {

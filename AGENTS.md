@@ -20,11 +20,14 @@ WireGuard/AmneziaWG, with a Samsung One UI (SESL 8) interface.
 Gradle modules (`settings.gradle.kts`):
 
 - `:app` - the application, all Java.
-- `:vpnhotspot:bridge`, `:vpnhotspot:sharing-bridge`, `:vpnhotspot:sharing-runtime`,
-  `:vpnhotspot:upstream-runtime` - root-tethering / VPN-sharing support under the top-level
-  `vpnhotspot/` directory. These are mixed JVM (Kotlin and Java), not all Kotlin: `bridge` is
-  Kotlin, `upstream-runtime` is Kotlin with a native Rust daemon built via cargo-ndk,
-  `sharing-runtime` is mixed, `sharing-bridge` is pure Java.
+- `:bridges:vpnhotspot:bridge`, `:bridges:vpnhotspot:sharing-bridge`,
+  `:bridges:vpnhotspot:sharing-runtime`, `:bridges:vpnhotspot:upstream-runtime` -
+  root-tethering / VPN-sharing support under `bridges/vpnhotspot/`. Every bridge to an
+  `external/` fork lives under `bridges/<name>/`, lowercase, so the module tree never
+  collides with the upstream mirror it wraps (`external/VPNHotspot`). These are mixed JVM
+  (Kotlin and Java), not all Kotlin: `bridge` is Kotlin, `upstream-runtime` is Kotlin with a
+  native Rust daemon built via cargo-ndk, `sharing-runtime` is mixed, `sharing-bridge` is
+  pure Java.
 - `:amneziawg-tunnel` - mapped to `external/amneziawg-android/tunnel`.
 
 App subpackages under `app/src/main/java/wings/v/`: core, ui, service, guardian, root, xray,
@@ -131,11 +134,17 @@ Pick the NARROWEST accurate scope. Real examples from this repo's log:
 - `[app/guardian] push config snapshot on connect in foreground and periodic sync`
 - `[app/vk] add browser fingerprint selector for VK TURN relay impersonation`
 
-Other valid scopes: `[vpnhotspot]` (the vpnhotspot modules), `[docs]` (README / docs),
-`[build]`, `[ci]`, `[ignore]` (.gitignore only), `[app/test]` (unit tests - use this even when
-the commit also makes a tiny test-enabling tweak to main code, e.g. dropping `private` to make a
-method package-visible). Use bare `[app]` only when a change truly spans many subsystems. Split
-one task across scopes into separate commits rather than one bundled `[app]`.
+Bridge modules take their directory path as the scope, down to the module:
+`[bridges/vpnhotspot/upstream-runtime]`, `[bridges/vpnhotspot/sharing-runtime]`,
+`[bridges/vpnhotspot/sharing-bridge]`, `[bridges/vpnhotspot/bridge]`. Use the shorter
+`[bridges/vpnhotspot]` only when a change really spans several of that bridge's modules, and
+bare `[bridges]` only when it spans bridges to different forks.
+
+Other valid scopes: `[docs]` (README / docs), `[build]`, `[ci]`, `[ignore]` (.gitignore only),
+`[app/test]` (unit tests - use this even when the commit also makes a tiny test-enabling tweak
+to main code, e.g. dropping `private` to make a method package-visible). Use bare `[app]` only
+when a change truly spans many subsystems. Split one task across scopes into separate commits
+rather than one bundled `[app]`.
 
 Submodule pointer bump in the parent repo: the subject is literally `[external/<path>] bump`
 and nothing more (e.g. `[external/vk-turn-proxy] bump`). The real description lives in the

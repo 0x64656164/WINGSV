@@ -36,10 +36,10 @@ jobs:
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v5
 
-      - name: Set up Go 1.25.5
+      - name: Set up Go 1.27.2
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25.5"
+          go-version: "1.27.2"
           check-latest: true
           cache-dependency-path: |
             external/vk-turn-proxy/go.sum
@@ -88,12 +88,18 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          # The action's default package set still contains the obsolete "tools"
+          # package, which Google dropped from the SDK repository; sdkmanager then
+          # exits 1 and the job dies before it builds anything. Everything the
+          # build needs is installed explicitly in the next step.
+          packages: ""
 
       - name: Install Android SDK packages
         run: |
           yes | sdkmanager --licenses >/dev/null
           sdkmanager --install \
-            "platforms;android-36" \
+            "platforms;android-37.1" \
             "build-tools;36.0.0" \
             "ndk;28.2.13676358" \
             "cmake;3.22.1"

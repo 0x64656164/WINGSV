@@ -53,7 +53,7 @@ public class FirstLaunchConnectionFragment extends Fragment {
 
         void onConnectionChoiceSkipped();
 
-        /** Called after the user successfully imported a config from clipboard or QR. */
+        /** A config arrived from the clipboard or a QR scan */
         void onConnectionImportApplied();
     }
 
@@ -81,6 +81,9 @@ public class FirstLaunchConnectionFragment extends Fragment {
         binding.textFirstLaunchSkip.setOnClickListener(this::dispatchSkip);
         binding.buttonFirstLaunchPasteClipboard.setOnClickListener(this::onPasteClipboardClicked);
         binding.buttonFirstLaunchScanQr.setOnClickListener(this::onScanQrClicked);
+        if (!wings.v.core.TvMode.hasCamera(requireContext())) {
+            binding.buttonFirstLaunchScanQr.setVisibility(View.GONE);
+        }
     }
 
     private void dispatchChoice(View view, String choice) {
@@ -121,8 +124,8 @@ public class FirstLaunchConnectionFragment extends Fragment {
 
     private void onScanQrClicked(View view) {
         Haptics.softSelection(view);
-        // Camera permission is requested by QrScanActivity itself only after
-        // the user taps this - never on app startup.
+        // QrScanActivity asks for the camera itself, and only from this tap - never
+        // on app startup
         Intent intent = QrScanActivity.Companion.createIntent(requireContext(), getString(R.string.qr_scan_title));
         try {
             qrScanLauncher.launch(intent);

@@ -1,6 +1,7 @@
 package wings.v.xray;
 
 import android.content.Context;
+import android.content.pm.ApplicationInfo;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
@@ -11,6 +12,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.net.InetAddress;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
@@ -54,19 +56,21 @@ import wings.v.core.XraySettings;
 public final class XrayConfigFactory {
 
     private static final String TUN_TAG = "tun-in";
-    private static final String TUN_BYPASS_TAG = "tun-in-bypass";
-    // gVisor stamps connections from per-app ByeDPI UIDs with this inbound tag
-    // (route_inbound_tag) so a routing rule can divert them to the standalone
-    // ByeDPI SOCKS outbound below, independent of the app-routing mode.
-    private static final String TUN_BYEDPI_TAG = "tun-in-byedpi";
+    // Имя интерфейса обязано быть задано. Пустое ядро подбирает само, перебирая
+    // системные интерфейсы, а netlink приложению закрыт - инбаунд не собирается
+    // вовсе. На Android имя ни на что не влияет: туннель открывается по fd
+    private static final String TUN_NAME = "wingsv-tun";
+    // TUN вешает этот тег (route_inbound_tag) на соединения выбранных под ByeDPI
+    // UID, и правило роутинга уводит их в отдельный SOCKS-outbound, не оглядываясь
+    // на режим роутинга приложений
     private static final String BYEDPI_APP_TAG = "byedpi-app";
+    private static final String UNKNOWN_OWNER = "-1";
     private static final String TPROXY_TAG = "tproxy-in";
-    // Transparent REDIRECT inbound for AP/hotspot (tethering) client traffic.
-    // Plain dokodemo-door with followRedirect (NO tproxy sockopt), so the app-uid
-    // VpnService xray can bind it - unlike the TPROXY inbound which needs
-    // IP_TRANSPARENT (root). iptables nat REDIRECT diverts shared-client traffic
-    // here, where SO_ORIGINAL_DST is recovered and routed through the active
-    // tunnel outbound, bypassing the gVisor TUN (and its unknown-uid policy).
+    // Сюда nat REDIRECT загоняет трафик клиентов раздачи. Голый dokodemo-door с
+    // followRedirect и без tproxy sockopt: IP_TRANSPARENT требует root, а этот
+    // инбаунд должен подниматься под uid приложения. Адрес достаётся через
+    // SO_ORIGINAL_DST, и соединение идёт в туннель минуя TUN с его политикой
+    // неизвестных владельцев
     public static final int REDIRECT_PORT = 55556;
     private static final String REDIR_TAG = "redirect-in";
     private static final String SOCKS_TAG = "socks-in";
@@ -76,7 +80,7 @@ public final class XrayConfigFactory {
      * через ноду, когда снаружи до панели не достучаться.
      *
      * <p>Пользовательский локальный прокси для этого не годится - его выключают,
-     * переносят и вешают пароль. Этот слушает петлю и живёт, пока живёт ядро.
+     * переносят и вешают пароль. Этот слушает петлю и живёт, пока живёт ядро
      */
     private static final String CONTROL_TAG = "wings-control-in";
 
@@ -175,30 +179,26 @@ public final class XrayConfigFactory {
         proxyOutbound.put("tag", PROXY_TAG);
         proxyOutbound.remove("sendThrough");
         sanitizeOutbound(proxyOutbound, settings.activeXrayProfile);
-        applySecurityOverrides(proxyOutbound, xraySettings);
         if (!TextUtils.isEmpty(trim(outboundHostOverride)) && outboundPortOverride > 0) {
             rewritePrimaryOutboundEndpoint(proxyOutbound, trim(outboundHostOverride), outboundPortOverride);
         }
 
-        // Resolve the proxy server's domain through xray's internal DNS over the
-        // protected dialer. libXray's initDns bootstrap was removed upstream, so
-        // without this the dialer uses Android's system resolver, which the VPN
-        // captures - domain-addressed servers then fail to connect.
+        // Домен сервера резолвит внутренний DNS ядра через protected-диалер. Иначе
+        // диалер зовёт системный резолвер, а его же ловит наш VPN - сервер, заданный
+        // доменом, не поднимется никогда
         applyServerDomainStrategy(proxyOutbound, xraySettings.ipv6);
 
         JSONObject root = new JSONObject();
         root.put("log", buildLog(context));
         root.put("dns", buildDns(xraySettings));
-        root.put("inbounds", buildInbounds(context, xraySettings, includeTunInbound, tproxyPort));
+        root.put("inbounds", buildInbounds(xraySettings, includeTunInbound, tproxyPort, settings.redirectPort));
         JSONArray outbounds = buildOutbounds(proxyOutbound, xraySettings, byeDpiSettings);
-        // The direct outbound carries DoH connections and direct-routed traffic;
-        // let it resolve hostnames through the internal DNS too so the DoH
-        // bootstrap servers in buildDns are reachable without the system resolver.
+        // Direct carries the DoH connections themselves, so it resolves through the
+        // internal DNS too - otherwise the bootstrap servers from buildDns are only
+        // reachable via the system resolver
         applyDirectResolveStrategy(outbounds, xraySettings.ipv6);
-        // Standalone ByeDPI SOCKS outbound for per-app ByeDPI routing (distinct
-        // from the byedpi-front transport chain): only relevant on the gVisor
-        // TUN path, where applyTunUidFilter stamps the selected UIDs so the
-        // routing rule below can divert them here.
+        // Only the TUN path has a routing rule that picks apps by UID and sends them
+        // to this terminal SOCKS outbound
         if (includeTunInbound) {
             appendByeDpiAppOutbound(outbounds, context, byeDpiSettings);
         }
@@ -211,10 +211,9 @@ public final class XrayConfigFactory {
     }
 
     /**
-     * Path of the unix socket xray's gRPC api listens on. Deliberately a filesystem
-     * socket rather than an abstract one: xray's commander has no authentication of any
-     * kind, so the only access control available is what the kernel enforces on the
-     * socket, and abstract sockets carry no ownership or permissions.
+     * The gRPC api listens on a filesystem unix socket, not an abstract one, on purpose:
+     * xray's commander has no authentication whatsoever, so kernel permissions on the
+     * socket are the only access control there is, and abstract sockets carry none
      */
     /** Суффикс lock-файла, который ядро держит рядом с unix-сокетом */
     private static final String LOCK_SUFFIX = ".lock";
@@ -223,9 +222,7 @@ public final class XrayConfigFactory {
         return new File(context.getFilesDir(), "xray/api.sock");
     }
 
-    /**
-     * Сносит сокет прошлого запуска вместе с его lock-файлом.
-     */
+    /** Сносит сокет прошлого запуска вместе с его lock-файлом */
     private static void deleteStaleApiSocket(File socket) {
         if (socket.exists()) {
             socket.delete();
@@ -237,12 +234,12 @@ public final class XrayConfigFactory {
     }
 
     /**
-     * Enables xray's own traffic counters and exposes them over the StatsService.
-     * The counters this turns on are named outbound&gt;&gt;&gt;{tag}&gt;&gt;&gt;traffic&gt;&gt;&gt;uplink|downlink.
+     * Turns on xray's own counters, named
+     * outbound&gt;&gt;&gt;{tag}&gt;&gt;&gt;traffic&gt;&gt;&gt;uplink|downlink, over the StatsService.
      *
      * &lt;p&gt;A non-empty api listen makes the commander bind the socket itself instead of
-     * registering an outbound handler, so no routing rule to the api tag is needed.
-     * The ,0600 suffix is consumed by xray's listener, which chmods the socket after bind.
+     * registering an outbound handler, so no routing rule to the api tag is needed. The
+     * ,0600 suffix goes to xray's listener, which chmods the socket after bind
      */
     private static void appendStatsApi(Context context, JSONObject root) throws Exception {
         File socket = apiSocketFile(context);
@@ -250,7 +247,7 @@ public final class XrayConfigFactory {
         if (parent != null) {
             parent.mkdirs();
         }
-        // A socket left behind by a previous run makes bind fail with EADDRINUSE.
+        // Сокет, оставшийся от прошлого запуска, валит bind с EADDRINUSE.
         // Рядом с сокетом ядро держит lock-файл, и после root-запуска оба остаются
         // с uid 0: обычный старт открывает lock на запись и получает EACCES. Unlink
         // при этом проходит - права проверяются на каталоге, а он наш
@@ -273,13 +270,12 @@ public final class XrayConfigFactory {
     }
 
     /**
-     * Builds an xray config that pipes the VpnService TUN through xray-core's
-     * gVisor inbound (which honors excludedUids/allowedUids the same way the
-     * Xray VPN path does) into a synthetic WireGuard outbound. Used as the
-     * non-root replacement for wireguard-android GoBackend on the userspace
-     * WG / VK TURN VpnService path: bypassed apps that try to bind to tun
-     * directly get filtered by xray's per-connection UID lookup, closing the
-     * Android per-app-VPN leak that GoBackend cannot fix from userspace.
+     * Pipes the VpnService TUN through xray's TUN inbound into a synthetic WireGuard
+     * outbound - the non-root stand-in for wireguard-android GoBackend.
+     *
+     * <p>The point is xray's per-connection UID lookup: a bypassed app that binds tun
+     * directly gets filtered there, and that per-app-VPN leak is one GoBackend cannot
+     * plug from userspace
      */
     public static String buildUserspaceWireGuardConfigJson(
         Context context,
@@ -289,48 +285,30 @@ public final class XrayConfigFactory {
         if (settings == null) {
             throw new IllegalArgumentException("settings required");
         }
-        // DNS server selection for xray's internal resolver. Three buckets:
-        //   1. VK TURN backend - mirror vk-turn-proxy's own bootstrap
-        //      resolver list (protected_net.go defaultResolverAddrs).
-        //      Yandex 77.88.8.x is first because in RU block conditions it
-        //      is rarely censored while 1.1.1.1 often is.
-        //   2. Other WG-style backends - use settings.wgDns ([Interface]
-        //      DNS line), matching wireguard-android's defaults.
-        //   3. Fallback - 1.1.1.1, 1.0.0.1.
+        // Внутренний резолвер ядра берёт DNS из строки [Interface] профиля:
+        // запросы уходят через WG-outbound, то есть работают и там, где с
+        // физической сети до публичных резолверов не добраться открытым UDP
         XraySettings sourceXraySettings = settings.xraySettings != null ? settings.xraySettings : new XraySettings();
         XraySettings effectiveXraySettings = sourceXraySettings.copy();
         boolean turnFlavor = settings.backendType != null && settings.backendType.usesTurnProxy();
-        String dnsServers;
-        if (turnFlavor) {
-            // For WG-style backends (VK TURN / WB Stream / AmneziaWG) use
-            // the wgDns from the WireGuard [Interface] preference. Routed
-            // through the WG outbound below so resolve works in block
-            // conditions where the underlying network cannot reach public
-            // resolvers in the clear.
-            String wgDns = settings.wgDns == null ? "" : settings.wgDns.trim();
-            dnsServers = wgDns.isEmpty() ? "1.1.1.1, 1.0.0.1" : wgDns;
-        } else {
-            String wgDns = settings.wgDns == null ? "" : settings.wgDns.trim();
-            dnsServers = wgDns.isEmpty() ? "1.1.1.1, 1.0.0.1" : wgDns;
-        }
+        String wgDns = settings.wgDns == null ? "" : settings.wgDns.trim();
+        String dnsServers = wgDns.isEmpty() ? "1.1.1.1, 1.0.0.1" : wgDns;
         effectiveXraySettings.remoteDns = dnsServers;
         effectiveXraySettings.directDns = dnsServers;
         JSONObject wgOutbound = buildWireGuardOutbound(settings, peerEndpointOverride);
 
-        // Domains explicitly routed direct must resolve via the provider DNS on
-        // the physical network so the answer matches the direct egress and does
-        // not hang on the (mobile-flaky) tunnel. Everything else keeps resolving
-        // through the tunnel resolver (anti-poisoning default).
+        // Domains routed direct resolve on the provider DNS so the answer matches the
+        // egress they will actually use and does not hang on the flaky tunnel.
+        // Everything else keeps resolving through the tunnel, against poisoning
         DirectDnsPlan directDnsPlan = computeDirectDnsPlan(context);
 
         JSONObject root = new JSONObject();
         root.put("log", buildLog(context, "info"));
         root.put("dns", buildDns(effectiveXraySettings, directDnsPlan));
-        root.put("inbounds", buildInbounds(context, effectiveXraySettings, true, 0));
+        root.put("inbounds", buildInbounds(effectiveXraySettings, true, 0, settings.redirectPort));
         root.put("outbounds", buildOutbounds(wgOutbound, effectiveXraySettings, null));
-        // For TURN/WG flavors route xray's internal DNS resolver through
-        // the WG outbound so DNS queries ride the tunnel instead of leaking
-        // out via direct/freedom on the underlying physical network.
+        // On TURN/WG the internal resolver goes out through the WG outbound, otherwise
+        // its queries leak via direct/freedom onto the physical network
         String internalDnsOutbound = turnFlavor ? PROXY_TAG : DIRECT_TAG;
         root.put("routing", buildRouting(context, effectiveXraySettings, true, 0, internalDnsOutbound, directDnsPlan));
         appendStatsApi(context, root);
@@ -387,6 +365,15 @@ public final class XrayConfigFactory {
         wgSettings.put("mtu", settings.wgMtu > 0 ? settings.wgMtu : 1420);
         wgSettings.put("isClient", true);
         wgSettings.put("noKernelTun", true);
+        // Внутренний резолвер userspace-WG: без него ядро подставляет свой
+        // дефолт 1.1.1.1/1.0.0.1, и домены, пришедшие в этот outbound, уходят
+        // резолвиться туда через туннель, мимо DNS из профиля. Ядро парсит
+        // адреса строго как литералы и паникует на домене, поэтому тут только
+        // чистые IP
+        JSONArray wgDnsServers = plainIpDnsServers(settings.wgDns);
+        if (wgDnsServers.length() > 0) {
+            wgSettings.put("remoteDNS", wgDnsServers);
+        }
 
         JSONObject outbound = new JSONObject();
         outbound.put("tag", PROXY_TAG);
@@ -527,18 +514,14 @@ public final class XrayConfigFactory {
         JSONObject dns = new JSONObject();
         dns.put("tag", DNS_TAG);
         JSONArray servers = new JSONArray();
-        // Bootstrap the hostnames of any DoH/DoT DNS servers through plain
-        // protected resolvers, so the internal resolver can reach a
-        // domain-addressed DNS server without the Android system resolver (which
-        // the VPN captures) and without libXray's removed initDns bootstrap.
-        // Scoped to those hosts so DoH stays primary for everything else.
+        // A domain-addressed DoH/DoT server has to be resolved by something, and the
+        // Android system resolver is captured by our own VPN. Scoped to those
+        // hostnames only, so DoH stays primary for everything else
         addDnsBootstrapServers(servers, settings.remoteDns, settings.directDns);
-        // Direct-routed domains first: one provider-DNS server per resolver IP,
-        // scoped to those domains so they are resolved on the physical network
-        // (the query itself is sent direct by a routing rule in buildRouting that
-        // matches these resolver IPs). No skipFallback: if the provider resolver
-        // is unreachable (e.g. stale after a Wi-Fi -> mobile switch) the tunnel
-        // resolver still answers, degrading gracefully instead of failing.
+        // One provider-DNS server per resolver IP, scoped to the direct-routed domains;
+        // the query itself goes out direct by a routing rule in buildRouting matching
+        // these resolver IPs. No skipFallback on purpose: a resolver gone stale after a
+        // Wi-Fi -> mobile switch then degrades to the tunnel resolver instead of failing
         if (directPlan != null) {
             JSONArray directDomains = new JSONArray();
             for (String domain : directPlan.domains) {
@@ -553,11 +536,14 @@ public final class XrayConfigFactory {
         }
         addDnsServer(servers, settings.remoteDns);
         addDnsServer(servers, settings.directDns);
-        // Plain-IP fallback resolvers (vk-turn-proxy's defaultResolverAddrs,
-        // Yandex first: rarely censored under RU block conditions where 1.1.1.1
-        // often is). Last, so configured/DoH servers stay preferred; they keep
-        // resolution working when those are unreachable.
-        addPlainFallbackResolvers(servers);
+        // Публичные резолверы по plain UDP нужны только как опора, когда все
+        // настроенные серверы адресованы доменами (DoH/DoT) и сами требуют
+        // резолва. Если хоть один сервер задан литералом, они только мешают:
+        // запросы к заблокированным в стране адресам висят по таймауту, а в
+        // VK TURN уходят ещё и через туннель
+        if (!hasPlainIpServer(servers)) {
+            addPlainFallbackResolvers(servers);
+        }
         if (servers.length() > 0) {
             dns.put("servers", servers);
         }
@@ -601,10 +587,9 @@ public final class XrayConfigFactory {
 
     private static final String[] BOOTSTRAP_RESOLVERS = { "77.88.8.8", "77.88.8.1", "8.8.8.8", "8.8.4.4", "1.1.1.1" };
 
-    // Adds, scoped to the hostnames of any DoH/DoT DNS servers in the configured
-    // values, one plain protected resolver per BOOTSTRAP_RESOLVERS entry, so xray
-    // can resolve those DNS-server hostnames (and only those) without the captured
-    // system resolver - letting DoH bootstrap. No-op for plain-IP servers.
+    // One plain resolver per BOOTSTRAP_RESOLVERS entry, scoped to the DoH/DoT server
+    // hostnames and nothing else, so those names resolve without the captured system
+    // resolver. No-op when every configured server is a plain IP
     private static void addDnsBootstrapServers(JSONArray servers, String remoteDns, String directDns) throws Exception {
         JSONArray hosts = new JSONArray();
         collectDnsServerHosts(hosts, remoteDns);
@@ -643,8 +628,8 @@ public final class XrayConfigFactory {
         }
     }
 
-    // Hostname of a DoH/DoT/DoQ DNS server URL (https/tls/quic/h2c/h3 scheme), or
-    // "" for plain-IP / IP-literal servers, which need no bootstrap.
+    // Hostname of a DoH/DoT/DoQ server URL (https/tls/quic/h2c/h3), or "" for plain-IP
+    // and IP-literal servers - those need no bootstrap
     private static String extractDnsServerHost(String value) {
         String normalized = trim(value);
         if (TextUtils.isEmpty(normalized) || !normalized.contains("://")) {
@@ -689,15 +674,36 @@ public final class XrayConfigFactory {
         return true;
     }
 
+    private static boolean hasPlainIpServer(JSONArray servers) {
+        for (int index = 0; index < servers.length(); index++) {
+            Object entry = servers.opt(index);
+            if (entry instanceof String && looksLikeIpLiteral(((String) entry).trim())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static JSONArray plainIpDnsServers(String rawValue) {
+        JSONArray servers = new JSONArray();
+        for (String entry : splitDnsEntries(rawValue)) {
+            String normalized = entry == null ? "" : entry.trim();
+            if (!normalized.isEmpty() && looksLikeIpLiteral(normalized)) {
+                servers.put(normalized);
+            }
+        }
+        return servers;
+    }
+
     private static void addPlainFallbackResolvers(JSONArray servers) {
         for (String resolver : BOOTSTRAP_RESOLVERS) {
             addDnsServer(servers, resolver);
         }
     }
 
-    // Sets sockopt.domainStrategy on an outbound so xray resolves the target
-    // domain through its internal DNS (protected dialer) instead of the captured
-    // Android system resolver. Force* on the proxy: the server MUST resolve.
+    // sockopt.domainStrategy sends the target domain to xray's internal DNS over the
+    // protected dialer instead of the captured Android resolver. Force* here because
+    // the proxy server must resolve or there is no tunnel at all
     private static void applyServerDomainStrategy(JSONObject outbound, boolean ipv6) throws Exception {
         JSONObject sockopt = ensureSockopt(outbound);
         if (TextUtils.isEmpty(sockopt.optString("domainStrategy", ""))) {
@@ -705,8 +711,8 @@ public final class XrayConfigFactory {
         }
     }
 
-    // Use* on the direct outbound: resolve via internal DNS when possible without
-    // hard-failing direct traffic on an unresolved name.
+    // Use* on direct: try the internal DNS, but an unresolved name must not kill
+    // direct traffic
     private static void applyDirectResolveStrategy(JSONArray outbounds, boolean ipv6) throws Exception {
         for (int i = 0; i < outbounds.length(); i++) {
             JSONObject outbound = outbounds.optJSONObject(i);
@@ -736,10 +742,10 @@ public final class XrayConfigFactory {
     }
 
     private static JSONArray buildInbounds(
-        Context context,
         XraySettings settings,
         boolean includeTunInbound,
-        int tproxyPort
+        int tproxyPort,
+        int redirectPort
     ) throws Exception {
         JSONArray inbounds = new JSONArray();
         if (includeTunInbound) {
@@ -748,22 +754,20 @@ public final class XrayConfigFactory {
             tunInbound.put("protocol", "tun");
             tunInbound.put("port", 0);
             JSONObject tunSettings = new JSONObject();
-            tunSettings.put("MTU", DEFAULT_MTU);
-            tunSettings.put("user_level", 0);
-            applyTunUidFilter(context, tunSettings, settings);
+            tunSettings.put("name", TUN_NAME);
+            tunSettings.put("mtu", DEFAULT_MTU);
+            tunSettings.put("userLevel", 0);
             tunInbound.put("settings", tunSettings);
             tunInbound.put("sniffing", buildSniffing(settings));
             inbounds.put(tunInbound);
 
-            // Transparent redirect inbound for shared (tethering) clients. Always
-            // present next to the gVisor TUN so the iptables nat REDIRECT can point
-            // here while sharing is active; idle otherwise. followRedirect recovers
-            // SO_ORIGINAL_DST; no tproxy sockopt, so it binds under the app uid.
+            // Always sits next to the TUN so the iptables nat REDIRECT has somewhere to
+            // point the moment sharing comes up; idle the rest of the time
             JSONObject redirInbound = new JSONObject();
             redirInbound.put("tag", REDIR_TAG);
             redirInbound.put("protocol", "dokodemo-door");
             redirInbound.put("listen", "0.0.0.0");
-            redirInbound.put("port", REDIRECT_PORT);
+            redirInbound.put("port", redirectPort > 0 ? redirectPort : REDIRECT_PORT);
             JSONObject redirSettings = new JSONObject();
             redirSettings.put("network", "tcp,udp");
             redirSettings.put("followRedirect", true);
@@ -883,14 +887,11 @@ public final class XrayConfigFactory {
     }
 
     /**
-     * Emits a standalone SOCKS outbound pointing at the local ByeDPI proxy when
-     * the user routed at least one app through ByeDPI. Unlike the byedpi-front
-     * transport chain (which wraps the VLESS outbound), this is a terminal
-     * outbound: the selected apps egress through ByeDPI directly to the origin,
-     * bypassing the Xray proxy. Gated on AppPrefs.hasByeDpiApps and on
-     * ByeDpiRuntimeState, so the outbound is absent (and the matching routing rule
-     * too) when the feature is unused or when no front proxy will serve the
-     * session - a config pointing at a dead port silently strands the apps.
+     * A terminal SOCKS outbound into the local ByeDPI proxy: unlike the byedpi-front
+     * chain, which wraps the VLESS outbound, the apps picked here go through ByeDPI
+     * straight to the origin and never touch the Xray proxy. Absent, along with its
+     * routing rule, while no app is selected or no front proxy will serve the session:
+     * a config pointing at a dead port silently strands those apps
      */
     private static void appendByeDpiAppOutbound(JSONArray outbounds, Context context, ByeDpiSettings byeDpiSettings)
         throws Exception {
@@ -917,8 +918,6 @@ public final class XrayConfigFactory {
     }
 
     static void enableByeDpiFrontProxy(JSONObject proxyOutbound, XraySettings xraySettings) throws Exception {
-        proxyOutbound.put("proxySettings", new JSONObject().put("tag", BYEDPI_FRONT_TAG).put("transportLayer", true));
-
         JSONObject streamSettings = proxyOutbound.optJSONObject("streamSettings");
         if (streamSettings == null) {
             streamSettings = new JSONObject();
@@ -933,6 +932,9 @@ public final class XrayConfigFactory {
             boolean ipv6 = xraySettings != null && xraySettings.ipv6;
             sockopt.put("domainStrategy", ipv6 ? "ForceIP" : "ForceIPv4");
         }
+        // Транспорт прокси поднимается через локальный byedpi: ядро больше не
+        // принимает это как proxySettings у outbound, только как dialerProxy
+        sockopt.put("dialerProxy", BYEDPI_FRONT_TAG);
     }
 
     private static JSONObject buildRouting(
@@ -967,28 +969,11 @@ public final class XrayConfigFactory {
         JSONArray rules = new JSONArray();
 
         JSONArray trafficInboundTags = buildTrafficInboundTags(settings, includeTunInbound, tproxyPort);
-        // Bypass rule MUST come before the DNS rule so even DNS queries from
-        // bypass UIDs get diverted to direct. Otherwise the tun-bypass tag
-        // matches "tun-in" routing decision twice (DNS -> dns-out, then
-        // proxy), and the DNS rule wins because it is listed earlier.
+        // Правила по владельцу соединения идут до DNS-правила: у выбранных
+        // приложений мимо туннеля должны уходить и их запросы к DNS, иначе
+        // решение примет DNS-правило, которое стоит раньше
         if (includeTunInbound) {
-            JSONObject bypassRule = new JSONObject();
-            bypassRule.put("type", "field");
-            bypassRule.put("inboundTag", new JSONArray().put(TUN_BYPASS_TAG));
-            bypassRule.put("outboundTag", DIRECT_TAG);
-            rules.put(bypassRule);
-        }
-        // ByeDPI per-app rule, like the bypass rule, must precede the DNS rule so
-        // the selected apps' DNS also egresses through ByeDPI. gVisor stamps their
-        // connections with TUN_BYEDPI_TAG (applyTunUidFilter route_uids); this rule
-        // sends that tag to the standalone ByeDPI SOCKS outbound. Gated on the same
-        // condition as appendByeDpiAppOutbound so the referenced tag always exists.
-        if (includeTunInbound && AppPrefs.hasByeDpiApps(context) && ByeDpiRuntimeState.isFrontProxyActive()) {
-            JSONObject byeDpiAppRule = new JSONObject();
-            byeDpiAppRule.put("type", "field");
-            byeDpiAppRule.put("inboundTag", new JSONArray().put(TUN_BYEDPI_TAG));
-            byeDpiAppRule.put("outboundTag", BYEDPI_APP_TAG);
-            rules.put(byeDpiAppRule);
+            appendAppRoutingRules(rules, context, settings);
         }
         JSONObject dnsRule = new JSONObject();
         dnsRule.put("type", "field");
@@ -998,9 +983,8 @@ public final class XrayConfigFactory {
         dnsRule.put("outboundTag", DNS_OUT_TAG);
         rules.put(dnsRule);
 
-        // Send internal-DNS queries aimed at the provider resolvers out direct, so
-        // direct-routed domains resolve on the physical network. Must precede the
-        // catch-all internal-DNS rule below (which sends the rest to the tunnel).
+        // Has to precede the catch-all internal-DNS rule below, which would otherwise
+        // drag these queries into the tunnel too
         if (directPlan != null) {
             JSONObject directDnsRule = new JSONObject();
             directDnsRule.put("type", "field");
@@ -1046,6 +1030,127 @@ public final class XrayConfigFactory {
 
         routing.put("rules", rules);
         return routing;
+    }
+
+    // Приложения выбираются правилами роутинга по владельцу соединения: ядро
+    // спрашивает UID у libXray и матчит его как имя процесса. Владелец, который
+    // так и остался неизвестен, приходит как "-1" - под него есть своё правило
+    private static void appendAppRoutingRules(JSONArray rules, Context context, XraySettings settings)
+        throws Exception {
+        if (context == null) {
+            return;
+        }
+        // Same gate as appendByeDpiAppOutbound: without a live local proxy the
+        // byedpi-app outbound does not exist, so routing apps to it would strand them.
+        if (ByeDpiRuntimeState.isFrontProxyActive() && AppPrefs.hasByeDpiApps(context)) {
+            JSONArray byeDpi = processNames(
+                wings.v.core.XrayTproxyRouter.resolveRoutedUids(context, AppPrefs.getByeDpiAppPackages(context))
+            );
+            if (byeDpi.length() > 0) {
+                rules.put(appRoutingRule(byeDpi, BYEDPI_APP_TAG));
+            }
+        }
+        wings.v.core.AppRoutingMode mode = AppPrefs.getAppRoutingMode(context);
+        appendSelfRoutingRules(rules, mode);
+        if (!mode.isTunDivert()) {
+            return;
+        }
+        Set<String> packages = AppPrefs.getEffectiveAppRoutingPackages(context);
+        if (packages == null || packages.isEmpty()) {
+            return;
+        }
+        // Неизвестного владельца, если его решено рубить, надо поймать раньше
+        // правила, которое уводит остальных мимо туннеля
+        String unknownOutboundTag = unknownOwnerOutbound(settings);
+        if (BLOCK_TAG.equals(unknownOutboundTag)) {
+            rules.put(appRoutingRule(new JSONArray().put(UNKNOWN_OWNER), BLOCK_TAG));
+        }
+        JSONArray diverted;
+        if (mode == wings.v.core.AppRoutingMode.XBYPASS) {
+            diverted = processNames(wings.v.core.XrayTproxyRouter.resolveRoutedUids(context, packages));
+        } else {
+            // XWhitelist: мимо туннеля уходят все, кого не выбрали. Отрицания в
+            // правилах нет, поэтому список считается здесь
+            diverted = otherAppProcessNames(context, packages);
+        }
+        if (diverted.length() == 0) {
+            return;
+        }
+        if (DIRECT_TAG.equals(unknownOutboundTag)) {
+            diverted.put(UNKNOWN_OWNER);
+        }
+        android.util.Log.i(
+            "WINGSV-Xray",
+            "appRouting: mode=" +
+                mode.prefValue +
+                " diverted=" +
+                diverted.length() +
+                " unknown=" +
+                unknownOutboundTag +
+                " packages=" +
+                packages
+        );
+        rules.put(appRoutingRule(diverted, DIRECT_TAG));
+    }
+
+    // В режимах, где туннелируются только выбранные приложения, само приложение
+    // в выбор не входит, и проверка внешнего адреса показывает адрес
+    // провайдера. Замер уводится в туннель отдельным правилом, а весь прочий
+    // свой трафик - подписки, панель, обновления - идёт мимо, как и раньше
+    private static void appendSelfRoutingRules(JSONArray rules, wings.v.core.AppRoutingMode mode) throws Exception {
+        if (!mode.isWhitelistFamily()) {
+            return;
+        }
+        JSONArray self = new JSONArray().put(String.valueOf(android.os.Process.myUid()));
+        JSONObject probeRule = appRoutingRule(self, PROXY_TAG);
+        JSONArray probeDomains = new JSONArray();
+        for (String host : wings.v.core.PublicIpFetcher.probeHosts()) {
+            probeDomains.put("full:" + host);
+        }
+        probeRule.put("domain", probeDomains);
+        rules.put(probeRule);
+        rules.put(appRoutingRule(self, DIRECT_TAG));
+    }
+
+    // Роутер неизвестных владельцев выключен - они идут в туннель наравне с
+    // остальными, то есть правила им не нужно вовсе
+    private static String unknownOwnerOutbound(XraySettings settings) {
+        if (settings == null || !settings.tunUnknownUidRouter) {
+            return null;
+        }
+        return "direct".equals(settings.tunUnknownUidPolicy) ? DIRECT_TAG : BLOCK_TAG;
+    }
+
+    private static JSONObject appRoutingRule(JSONArray processNames, String outboundTag) throws Exception {
+        JSONObject rule = new JSONObject();
+        rule.put("type", "field");
+        rule.put("inboundTag", new JSONArray().put(TUN_TAG));
+        rule.put("process", processNames);
+        rule.put("outboundTag", outboundTag);
+        return rule;
+    }
+
+    private static JSONArray processNames(List<Integer> uids) {
+        JSONArray names = new JSONArray();
+        for (Integer uid : uids) {
+            if (uid != null && uid > 0) {
+                names.put(String.valueOf(uid));
+            }
+        }
+        return names;
+    }
+
+    private static JSONArray otherAppProcessNames(Context context, Set<String> listedPackages) {
+        Set<Integer> listed = new HashSet<>(wings.v.core.XrayTproxyRouter.resolveRoutedUids(context, listedPackages));
+        Set<Integer> seen = new HashSet<>();
+        JSONArray names = new JSONArray();
+        for (ApplicationInfo info : context.getPackageManager().getInstalledApplications(0)) {
+            if (info == null || info.uid <= 0 || listed.contains(info.uid) || !seen.add(info.uid)) {
+                continue;
+            }
+            names.put(String.valueOf(info.uid));
+        }
+        return names;
     }
 
     private static JSONArray buildTrafficInboundTags(XraySettings settings, boolean includeTunInbound, int tproxyPort) {
@@ -1120,7 +1225,7 @@ public final class XrayConfigFactory {
             return true;
         }
         if (rule.matchType == XrayRoutingRule.MatchType.NETWORK) {
-            // Xray "network" is a comma-joined string, e.g. "tcp", "udp", "tcp,udp".
+            // Xray "network" is a comma-joined string, e.g. "tcp", "udp", "tcp,udp"
             String network = joinLowerTokens(rule.code);
             if (TextUtils.isEmpty(network)) {
                 return false;
@@ -1129,7 +1234,7 @@ public final class XrayConfigFactory {
             return true;
         }
         if (rule.matchType == XrayRoutingRule.MatchType.PROTOCOL) {
-            // Xray "protocol" is an array, e.g. ["bittorrent"]. Needs sniffing on.
+            // Xray "protocol" is an array, e.g. ["bittorrent"], and needs sniffing on
             JSONArray protocols = new JSONArray();
             for (String token : rule.code.split("[,\\s]+")) {
                 String normalized = trim(token).toLowerCase(java.util.Locale.ROOT);
@@ -1212,9 +1317,9 @@ public final class XrayConfigFactory {
     }
 
     /**
-     * Plan for resolving direct-routed domains via the provider DNS on the
-     * physical network. Null when there are no direct domain rules or no usable
-     * physical resolver (then everything keeps resolving through the tunnel).
+     * Which direct-routed domains go to which provider resolver. Null when there are no
+     * direct domain rules, or no usable physical resolver - then everything resolves
+     * through the tunnel
      */
     @Nullable
     private static DirectDnsPlan computeDirectDnsPlan(Context context) {
@@ -1306,153 +1411,6 @@ public final class XrayConfigFactory {
         return sniffing;
     }
 
-    // Mirrors Android's per-app VPN routing into xray's TUN inbound as a
-    // secondary gVisor-level filter. Android's addDisallowedApplication does
-    // not reliably stop excluded apps from binding to the tun interface
-    // directly, so we look up the UID of every new TCP/UDP connection inside
-    // xray and drop it when it does not match. See
-    // external/Xray-core/proxy/tun/uid_lookup_linux.go for the lookup, and
-    // proxy/tun/stack_gvisor.go for the enforcement point.
-    // Maps the unknown-UID router/policy settings onto the gVisor TUN filter
-    // flags: router off -> let unresolved-UID connections fall through to the
-    // tunnel; router on + "direct" -> divert them to the bypass inbound (direct);
-    // router on + "drop" -> leave both flags unset so the filter drops them.
-    private static void applyUnknownUidPolicy(JSONObject tunSettings, XraySettings xraySettings) throws Exception {
-        if (xraySettings == null) {
-            return;
-        }
-        if (!xraySettings.tunUnknownUidRouter) {
-            tunSettings.put("tunnelUnknownUid", true);
-        } else if ("direct".equals(xraySettings.tunUnknownUidPolicy)) {
-            tunSettings.put("bypassUnknownUid", true);
-        }
-    }
-
-    private static void applyByeDpiRouteUids(Context context, JSONObject tunSettings) throws Exception {
-        // Same gate as the outbound and its rule: stamping routeUids with no
-        // matching rule behind the tag would send those UIDs nowhere useful.
-        if (!ByeDpiRuntimeState.isFrontProxyActive()) {
-            return;
-        }
-        Set<String> byeDpiPackages = AppPrefs.getByeDpiAppPackages(context);
-        if (byeDpiPackages.isEmpty()) {
-            return;
-        }
-        List<Integer> uids = wings.v.core.XrayTproxyRouter.resolveRoutedUids(context, byeDpiPackages);
-        JSONArray uidArray = new JSONArray();
-        for (Integer uid : uids) {
-            if (uid != null && uid > 0) {
-                uidArray.put(uid.longValue());
-            }
-        }
-        if (uidArray.length() == 0) {
-            return;
-        }
-        tunSettings.put("routeUids", uidArray);
-        tunSettings.put("routeInboundTag", TUN_BYEDPI_TAG);
-        android.util.Log.i(
-            "WINGSV-Xray",
-            "applyTunUidFilter: byedpi route uids=" + uids + " packages=" + byeDpiPackages
-        );
-    }
-
-    private static void applyTunUidFilter(Context context, JSONObject tunSettings, XraySettings xraySettings)
-        throws Exception {
-        if (context == null) {
-            return;
-        }
-        // ByeDPI per-app divert is independent of the app-routing mode handled
-        // below: stamp the selected UIDs with route_inbound_tag so buildRouting
-        // sends them to the standalone ByeDPI SOCKS outbound. Applied first so it
-        // survives the early returns for plain Bypass / Whitelist / Off.
-        applyByeDpiRouteUids(context, tunSettings);
-        wings.v.core.AppRoutingMode routingMode = AppPrefs.getAppRoutingMode(context);
-        if (routingMode == wings.v.core.AppRoutingMode.BYPASS || routingMode == wings.v.core.AppRoutingMode.WHITELIST) {
-            // Plain Bypass / Whitelist filter at the VpnService framework layer
-            // (addDisallowedApplication / addAllowedApplication) and use NO gVisor
-            // TUN UID filter - symmetric with each other. The gVisor allowlist needs
-            // per-connection UID resolution (getConnectionOwnerUid on non-root), which
-            // does not reliably attribute forwarded connections; a known-but-not-listed
-            // UID (e.g. a system resolver) then hits a hard drop and black-holes the
-            // whole mode. Only XBYPASS/XWHITELIST run the gVisor filter - they divert
-            // non-listed UIDs to direct instead of dropping, so a missed UID degrades
-            // to a leak, not a blackout. On root, per-UID routing is enforced by
-            // iptables owner-match (RootMultiUserRouter / TPROXY) regardless of mode,
-            // so nothing is lost here.
-            android.util.Log.i(
-                "WINGSV-Xray",
-                "applyTunUidFilter: plain " + routingMode.prefValue + " uses VpnService filter, no gVisor filter"
-            );
-            return;
-        }
-        Set<String> packages = AppPrefs.getEffectiveAppRoutingPackages(context);
-        if (packages == null || packages.isEmpty()) {
-            android.util.Log.i(
-                "WINGSV-Xray",
-                "applyTunUidFilter: no effective app-routing packages, gVisor UID filter disabled"
-            );
-            return;
-        }
-        List<Integer> uids = wings.v.core.XrayTproxyRouter.resolveRoutedUids(context, packages);
-        if (uids.isEmpty()) {
-            return;
-        }
-        JSONArray uidArray = new JSONArray();
-        for (Integer uid : uids) {
-            if (uid != null && uid > 0) {
-                uidArray.put(uid.longValue());
-            }
-        }
-        if (uidArray.length() == 0) {
-            return;
-        }
-        if (routingMode == wings.v.core.AppRoutingMode.XBYPASS) {
-            // XBypass: tag listed-UID connections with bypass_inbound_tag
-            // so xray routing diverts them to the freedom/direct outbound
-            // (= underlying network via protect-bridge). Combined with the
-            // VpnService running WITHOUT addDisallowedApplication, all apps'
-            // traffic enters the tunnel and ConnectivityManager
-            // .getConnectionOwnerUid resolves their UIDs - including
-            // bypass apps that try --interface tun0 tricks. Their packets
-            // are redirected back to the underlying network at gVisor
-            // level, transparently to the app, instead of being dropped.
-            tunSettings.put("bypassUids", uidArray);
-            tunSettings.put("bypassInboundTag", TUN_BYPASS_TAG);
-            // Optional: also bypass connections whose UID could not be
-            // resolved (Android's API returns INVALID_UID for SO_BINDTODEVICE
-            // / explicit source-IP-bind leakers like `curl --interface tun0`
-            // because Android never registered the connection as VPN-tracked).
-            // Closes the deliberate-leak path at the cost of also routing
-            // system services that happen to not have a UID through direct.
-            applyUnknownUidPolicy(tunSettings, xraySettings);
-        } else if (routingMode == wings.v.core.AppRoutingMode.XWHITELIST) {
-            // XWhitelist (inverse of XBypass): keep every app inside the tunnel
-            // but tunnel ONLY the listed UIDs; divert the rest to direct at the
-            // gVisor level. allowedUids restricts the tunnel to the listed UIDs,
-            // and bypass_inbound_tag makes the core re-route the non-listed (and,
-            // when opted-in, unknown) UIDs to the direct/freedom outbound instead
-            // of dropping them - so non-selected apps keep working while the
-            // SO_BINDTODEVICE escape path is still closed.
-            tunSettings.put("allowedUids", uidArray);
-            tunSettings.put("bypassInboundTag", TUN_BYPASS_TAG);
-            applyUnknownUidPolicy(tunSettings, xraySettings);
-        }
-        android.util.Log.i(
-            "WINGSV-Xray",
-            "applyTunUidFilter: mode=" + routingMode.prefValue + " uids=" + uids + " packages=" + packages
-        );
-        // Unresolved /proc/net UID is now always treated as a filter failure
-        // and the connection is dropped, closing the SO_BINDTODEVICE escape
-        // route. To absorb the race between an app opening sockets in rapid
-        // succession (Tor pulling 6+ guards at once, SSH multiplexing) and
-        // the kernel publishing those sockets in /proc/net/tcp*, gVisor will
-        // retry the lookup every ~5 ms for up to uidLookupTimeoutMs before
-        // dropping. 0 disables retries entirely.
-        if (xraySettings != null && xraySettings.tunUidLookupTimeoutMs > 0) {
-            tunSettings.put("uidLookupTimeoutMs", xraySettings.tunUidLookupTimeoutMs);
-        }
-    }
-
     static boolean isLocalProxyEnabled(XraySettings settings) {
         return settings != null && settings.localProxyEnabled && settings.localProxyPort > 0;
     }
@@ -1533,20 +1491,6 @@ public final class XrayConfigFactory {
         server.put("users", new JSONArray().put(new JSONObject().put("user", username).put("pass", password)));
     }
 
-    static void applySecurityOverrides(JSONObject outbound, XraySettings settings) throws Exception {
-        if (!settings.allowInsecure) {
-            return;
-        }
-        JSONObject streamSettings = outbound.optJSONObject("streamSettings");
-        if (streamSettings == null) {
-            return;
-        }
-        JSONObject tlsSettings = streamSettings.optJSONObject("tlsSettings");
-        if (tlsSettings != null) {
-            tlsSettings.put("allowInsecure", true);
-        }
-    }
-
     static void rewritePrimaryOutboundEndpoint(JSONObject outbound, String host, int port) throws Exception {
         JSONObject settings = outbound == null ? null : outbound.optJSONObject("settings");
         if (settings == null || TextUtils.isEmpty(trim(host)) || port <= 0) {
@@ -1583,6 +1527,7 @@ public final class XrayConfigFactory {
 
     static void sanitizeOutbound(JSONObject outbound, XrayProfile activeProfile) throws Exception {
         pruneJsonObject(outbound);
+        dropOptionsTheCoreRejects(outbound);
         JSONObject streamSettings = outbound.optJSONObject("streamSettings");
         if (streamSettings == null) {
             return;
@@ -1591,6 +1536,44 @@ public final class XrayConfigFactory {
         sanitizeTlsSettings(streamSettings, fallbackServerName);
         sanitizeRealitySettings(streamSettings, fallbackServerName);
         pruneJsonObject(streamSettings);
+    }
+
+    // Профиль приезжает из ссылки, подписки или правки JSON, и в нём может
+    // лежать то, что ядро уже не принимает - такой конфиг не грузится целиком,
+    // то есть туннель просто не поднимается. Что переносится - переносим,
+    // остальное выкидываем
+    private static void dropOptionsTheCoreRejects(JSONObject outbound) throws Exception {
+        JSONObject proxySettings = outbound.optJSONObject("proxySettings");
+        if (proxySettings != null) {
+            outbound.remove("proxySettings");
+            String tag = trim(proxySettings.optString("tag"));
+            if (!TextUtils.isEmpty(tag)) {
+                JSONObject streamSettings = outbound.optJSONObject("streamSettings");
+                if (streamSettings == null) {
+                    streamSettings = new JSONObject();
+                    outbound.put("streamSettings", streamSettings);
+                }
+                JSONObject sockopt = streamSettings.optJSONObject("sockopt");
+                if (sockopt == null) {
+                    sockopt = new JSONObject();
+                    streamSettings.put("sockopt", sockopt);
+                }
+                if (TextUtils.isEmpty(trim(sockopt.optString("dialerProxy")))) {
+                    sockopt.put("dialerProxy", tag);
+                }
+            }
+        }
+        JSONObject streamSettings = outbound.optJSONObject("streamSettings");
+        if (streamSettings == null) {
+            return;
+        }
+        for (String section : new String[] { "tlsSettings", "realitySettings" }) {
+            JSONObject settings = streamSettings.optJSONObject(section);
+            if (settings != null && settings.has("allowInsecure")) {
+                settings.remove("allowInsecure");
+                android.util.Log.w("WINGSV-Xray", "dropped allowInsecure from " + section + ", the core rejects it");
+            }
+        }
     }
 
     private static void sanitizeTlsSettings(JSONObject streamSettings, String fallbackServerName) throws Exception {
@@ -1613,9 +1596,9 @@ public final class XrayConfigFactory {
             return;
         }
 
-        // libXray serializes client REALITY configs with server-only fields as null.
-        // Xray-core treats dest/target json.RawMessage=null as present and switches to
-        // server-side parsing, which then fails on missing serverNames/privateKey.
+        // libXray serializes client REALITY configs with server-only fields as null, and
+        // xray-core counts dest/target json.RawMessage=null as present: it flips to
+        // server-side parsing and then dies on the missing serverNames/privateKey
         removeKeys(
             realitySettings,
             "show",

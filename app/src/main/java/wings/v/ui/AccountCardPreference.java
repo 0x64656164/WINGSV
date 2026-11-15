@@ -19,8 +19,8 @@ import wings.v.core.FederationAccount;
 /**
  * Карточка аккаунта первой строкой в настройках.
  *
- * <p>Показывает имя, состояние и аватар - то же, что видно на самом экране
- * аккаунта, чтобы не приходилось заходить туда ради проверки.
+ * <p>Имя, состояние и аватар - то же, что на экране аккаунта, чтобы не лазить
+ * туда ради проверки
  */
 public final class AccountCardPreference extends Preference {
 
@@ -55,7 +55,7 @@ public final class AccountCardPreference extends Preference {
                 : context.getString(R.string.wings_account_summary)
         );
 
-        String url = FederationAccount.avatarUrl(context);
+        String url = AvatarFetcher.sized(FederationAccount.avatarUrl(context), AvatarFetcher.SIZE_CARD);
         if (TextUtils.isEmpty(url)) {
             avatar.setImageResource(R.drawable.ic_account_avatar);
             return;

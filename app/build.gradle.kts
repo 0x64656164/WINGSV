@@ -260,7 +260,7 @@ val buildVkTurnProxyArm64: TaskProvider<Exec> by tasks.registering(Exec::class) 
         exclude(".git/**")
         exclude("**/build/**")
     })
-    inputs.property("vkTurnGoToolchain", "go1.25.5")
+    inputs.property("vkTurnGoToolchain", "go1.27.2")
     outputs.file(generatedVkTurnBinary)
 
     doFirst {
@@ -280,7 +280,7 @@ val buildVkTurnProxyArm64: TaskProvider<Exec> by tasks.registering(Exec::class) 
             mapOf(
                 "GOMODCACHE" to goModCacheDir.absolutePath,
                 "GOCACHE" to goCacheDir.absolutePath,
-                "GOTOOLCHAIN" to "go1.25.5",
+                "GOTOOLCHAIN" to "go1.27.2",
                 "CGO_ENABLED" to "1",
                 "GOOS" to "android",
                 "GOARCH" to "arm64",
@@ -315,7 +315,7 @@ val buildVkTurnProxyArm32: TaskProvider<Exec> by tasks.registering(Exec::class) 
         exclude(".git/**")
         exclude("**/build/**")
     })
-    inputs.property("vkTurnGoToolchain", "go1.25.5")
+    inputs.property("vkTurnGoToolchain", "go1.27.2")
     outputs.file(generatedVkTurnBinaryArm32)
 
     doFirst {
@@ -335,7 +335,7 @@ val buildVkTurnProxyArm32: TaskProvider<Exec> by tasks.registering(Exec::class) 
             mapOf(
                 "GOMODCACHE" to goModCacheDir.absolutePath,
                 "GOCACHE" to goCacheDir.absolutePath,
-                "GOTOOLCHAIN" to "go1.25.5",
+                "GOTOOLCHAIN" to "go1.27.2",
                 "CGO_ENABLED" to "1",
                 "GOOS" to "android",
                 "GOARCH" to "arm",
@@ -445,10 +445,16 @@ val buildLibXrayAndroidAar: TaskProvider<Exec> by tasks.registering(Exec::class)
         workingDir = workDir
         environment(
             mapOf(
-                "GOTOOLCHAIN" to "go1.26.3",
+                "GOTOOLCHAIN" to "go1.27.2",
+                // @latest из file-прокси не резолвится - он отдаёт пустой список
+                // версий, и go на этом встаёт, не пробуя сеть. Поэтому версия
+                // gomobile задаётся точно: такой запрос file-прокси либо отдаёт
+                // из кэша, либо честно промахивается и go уходит в сеть
+                "LIBXRAY_GOMOBILE_VERSION" to (System.getenv("LIBXRAY_GOMOBILE_VERSION")
+                    ?: "v0.0.0-20261011034528-197770444867"),
                 // Скачанные модули лежат рядом и годятся как прокси: go резолвит
-                // из них даже @latest и без сети, а в сеть идёт только за тем,
-                // чего в кэше нет. Свой GOPROXY, если задан, важнее
+                // из них и без сети, а в сеть идёт только за тем, чего в кэше
+                // нет. Свой GOPROXY, если задан, важнее
                 "GOPROXY" to (System.getenv("GOPROXY")
                     ?: "file://${File(libXrayGoModCacheDir, "cache/download").absolutePath},https://proxy.golang.org,direct"),
                 "ANDROID_SDK_ROOT" to resolveAndroidSdkDir().absolutePath,
@@ -700,6 +706,10 @@ android {
     namespace = "wings.v"
     compileSdk = 37
 
+    // oneui-design с 0.9.18 требует минорную 37.1: без неё checkAarMetadata
+    // валит сборку ещё до компиляции
+    compileSdkMinor = 1
+
     installation {
         // installDebug / installRelease push the APK only to user 0. Without this,
         // adb install on devices with secure/work-profile users picks the foreground
@@ -889,8 +899,8 @@ dependencies {
     implementation(libs.livekit.android)
     implementation(project(":amneziawg-tunnel"))
     implementation(files(generatedLibXrayAar))
-    implementation(project(":vpnhotspot:bridge"))
-    implementation(project(":vpnhotspot:sharing-bridge"))
+    implementation(project(":bridges:vpnhotspot:bridge"))
+    implementation(project(":bridges:vpnhotspot:sharing-bridge"))
     compileOnly(files("libs/xposed-api-82.jar"))
 
     testImplementation(libs.junit)

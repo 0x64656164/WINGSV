@@ -29,16 +29,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          submodules: recursive
+          submodules: true
           fetch-depth: 0
 
+      # Nested submodules are pulled per path, not recursively: VPNHotspot carries
+      # an AOSP hardware/interfaces submodule that only its own app module needs,
+      # and cloning it costs minutes here for nothing. amneziawg-tools and
+      # elf-cleaner are real build inputs.
+      - name: Init nested submodules the build needs
+        run: git submodule update --init --recursive external/amneziawg-android
+
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.33.0
+        uses: pnpm/action-setup@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: pnpm
@@ -55,10 +60,10 @@ jobs:
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v5
 
-      - name: Set up Go 1.25.5
+      - name: Set up Go 1.27.2
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25.5"
+          go-version: "1.27.2"
           check-latest: true
           cache-dependency-path: |
             external/vk-turn-proxy/go.sum
@@ -107,25 +112,49 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          # The action's default package set still contains the obsolete "tools"
+          # package, which Google dropped from the SDK repository; sdkmanager then
+          # exits 1 and the job dies before it builds anything. Everything the
+          # build needs is installed explicitly in the next step.
+          packages: ""
 
       - name: Install Android SDK packages
         run: |
           yes | sdkmanager --licenses >/dev/null
           sdkmanager --install \
-            "platforms;android-36" \
+            "platform-tools" \
+            "platforms;android-37.1" \
             "build-tools;36.0.0" \
             "ndk;28.2.13676358" \
             "cmake;3.22.1"
 
       - name: Install protoc
         run: |
+          command -v protoc >/dev/null && exit 0
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
+
+      # cargo-ndk каждый раз собирается из исходников - это минуты коту под
+      # хвост. Target демона суём сюда же, иначе Rust перемалывает всё нахуй
+      # заново из-за одной правки
+      - name: Cache Rust toolchain state
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            bridges/vpnhotspot/upstream-runtime/build/rust/vpnhotspotd
+          key: ${{ runner.os }}-cargo-${{ hashFiles('external/VPNHotspot/mobile/src/main/rust/vpnhotspotd/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Set up cargo-ndk for the upstream-runtime daemon
         run: |
           rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
-          cargo install cargo-ndk --locked
+          command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
 
       # - name: Run Java lint
       #   run: pnpm lint:java

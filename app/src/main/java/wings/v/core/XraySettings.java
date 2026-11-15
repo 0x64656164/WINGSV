@@ -5,7 +5,6 @@ import java.util.Objects;
 public final class XraySettings {
 
     public boolean allowLan;
-    public boolean allowInsecure;
     public boolean localProxyEnabled;
     public boolean localProxyAuthEnabled = true;
     public String localProxyUsername;
@@ -32,7 +31,7 @@ public final class XraySettings {
     public boolean proxyQuicEnabled;
     public boolean restartOnNetworkChange;
     public int tunUidLookupTimeoutMs;
-    // Unknown-UID router: when enabled the gVisor TUN filter applies tunUnknownUidPolicy
+    // Unknown-UID router: when enabled the TUN filter applies tunUnknownUidPolicy
     // ("direct" or "drop") to connections whose UID could not be resolved; when disabled
     // such connections are let into the tunnel unchanged.
     public boolean tunUnknownUidRouter = true;
@@ -59,7 +58,6 @@ public final class XraySettings {
     public XraySettings copy() {
         XraySettings copy = new XraySettings();
         copy.allowLan = allowLan;
-        copy.allowInsecure = allowInsecure;
         copy.localProxyEnabled = localProxyEnabled;
         copy.localProxyAuthEnabled = localProxyAuthEnabled;
         copy.localProxyUsername = localProxyUsername;
@@ -98,7 +96,6 @@ public final class XraySettings {
         XraySettings that = (XraySettings) other;
         return (
             allowLan == that.allowLan &&
-            allowInsecure == that.allowInsecure &&
             localProxyEnabled == that.localProxyEnabled &&
             localProxyAuthEnabled == that.localProxyAuthEnabled &&
             localProxyPort == that.localProxyPort &&
@@ -130,7 +127,6 @@ public final class XraySettings {
     public int hashCode() {
         return Objects.hash(
             allowLan,
-            allowInsecure,
             localProxyEnabled,
             localProxyAuthEnabled,
             localProxyUsername,

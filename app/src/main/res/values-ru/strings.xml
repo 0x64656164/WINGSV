@@ -579,6 +579,15 @@
     <string name="awg_settings_interface_i3_title">I3</string>
     <string name="awg_settings_interface_i4_title">I4</string>
     <string name="awg_settings_interface_i5_title">I5</string>
+    <string name="awg_settings_interface_hpk_title">HeaderProtectionKey</string>
+    <string name="awg_settings_interface_cpa_title">ContentPaddingAddition</string>
+    <string name="awg_settings_interface_rekey_after_title">RekeyAfterTime</string>
+    <string name="awg_settings_interface_rekey_timeout_title">RekeyTimeout</string>
+    <string name="awg_settings_interface_reject_after_title">RejectAfterTime</string>
+    <string name="awg_settings_interface_keepalive_timeout_title">KeepaliveTimeout</string>
+    <string name="awg_settings_interface_max_handshakes_title">MaxHandshakeAttempts</string>
+    <string name="awg_settings_interface_random_trailers_title">RandomTrailers</string>
+    <string name="awg_settings_interface_disable_cookies_title">DisableCookies</string>
     <string name="awg_settings_peer_public_key_title">PublicKey</string>
     <string name="awg_settings_peer_preshared_key_title">PreSharedKey</string>
     <string name="awg_settings_peer_allowed_ips_title">AllowedIPs</string>
@@ -831,6 +840,9 @@
     <string name="xray_subscriptions_last_updated_label">Обновлено: %1$s</string>
     <string name="xray_subscriptions_title_hint">Название</string>
     <string name="xray_subscriptions_url_hint">URL подписки</string>
+    <string name="xray_subscriptions_mirror_urls_hint">Запасные URL, по одному на строку</string>
+    <string name="auto_search_setting_min_speed">Желаемая скорость</string>
+    <string name="auto_search_setting_min_speed_summary">%1$d Mbit/s, 0 отключает проверку</string>
     <string name="xray_subscriptions_url_required">Укажите URL подписки</string>
     <string name="xray_subscriptions_auto_update_per_subscription">Автообновлять эту подписку</string>
     <string name="xray_subscriptions_auto_update_disabled_label">Автообновление выключено</string>
@@ -862,8 +874,6 @@
     <string name="xray_settings_title">Настройки Xray</string>
     <string name="xray_settings_allow_lan_title">Разрешать подключения из LAN</string>
     <string name="xray_settings_allow_lan_summary">Открывает локальный прокси для других устройств в локальной сети</string>
-    <string name="xray_settings_allow_insecure_title">Разрешать небезопасные соединения</string>
-    <string name="xray_settings_allow_insecure_summary">Разрешает insecure TLS там, где это поддерживает профиль</string>
     <string name="xray_settings_ipv6_title">Включить IPv6</string>
     <string name="xray_settings_ipv6_summary">Использовать IPv6 в Xray runtime</string>
     <string name="xray_settings_sniffing_title">Sniffing</string>
@@ -921,10 +931,11 @@
     <string name="warning_http_auth_disable">Вы отключаете аутентификацию HTTP прокси. Это снизит безопасность вашего соединения</string>
     <string name="warning_xray_tun_unknown_uid_bypass_disable">Вы отключаете защиту от утечек для пакетов с неизвестным UID. Приложения, биндящиеся к tun0 напрямую (через SO_BINDTODEVICE или явный source IP), будут уходить через VPN даже если они в bypass-списке, раскрывая IP VPN сервера.</string>
     <string name="warning_http_password_weak">Задан слишком простой пароль HTTP прокси. Это снизит безопасность вашего соединения</string>
-    <string name="warning_xray_allow_insecure_enable">Вы отключаете проверку TLS-сертификатов в outbound Xray. Соединение становится уязвимым к MITM-атакам</string>
     <string name="xray_routing_settings_title">Маршрутизация Xray</string>
     <string name="xray_routing_geo_files_title">Geo-файлы</string>
     <string name="xray_routing_geo_files_summary">Эти файлы используются для geoip/geosite routing правил</string>
+    <string name="xray_routing_geo_auto_update_title">Обновлять автоматически</string>
+    <string name="xray_routing_geo_auto_update_summary">Скачивать базы раз в сутки</string>
     <string name="xray_routing_rules_title">Routing правила</string>
     <string name="xray_routing_rules_summary">Порядок правил важен: первое совпадение срабатывает раньше общего proxy-правила</string>
     <string name="xray_routing_rules_entry_summary">Добавление, порядок и валидация routing правил</string>

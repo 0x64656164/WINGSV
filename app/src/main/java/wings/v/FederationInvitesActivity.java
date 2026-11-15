@@ -26,7 +26,7 @@ import wings.v.core.InviteCode;
  * Приглашения: свой код показывают с экрана, чужой вводят или снимают камерой.
  *
  * <p>В дерево встают один раз, поэтому у того, кого уже пригласили, второй код
- * ничего не поменяет - и говорить об этом надо до похода на сервер.
+ * ничего не поменяет - и говорить об этом надо до похода на сервер
  */
 public final class FederationInvitesActivity extends AppCompatActivity {
 
@@ -100,6 +100,9 @@ public final class FederationInvitesActivity extends AppCompatActivity {
         findViewById(R.id.invite_create).setOnClickListener(v -> createInvite());
         findViewById(R.id.invite_redeem).setOnClickListener(v -> redeem(text(redeemInput)));
         findViewById(R.id.invite_scan).setOnClickListener(v -> openScanner());
+        if (!wings.v.core.TvMode.hasCamera(this)) {
+            findViewById(R.id.invite_scan).setVisibility(android.view.View.GONE);
+        }
         share.setOnClickListener(v -> shareLink());
 
         load();
@@ -257,9 +260,8 @@ public final class FederationInvitesActivity extends AppCompatActivity {
     /**
      * Занятость блока приглашения.
      *
-     * <p>Скелетон поднимается только тогда, когда кода на экране ещё нет: если он
-     * уже нарисован, подменять его крутилкой незачем, а после ошибки он так и
-     * остался бы крутиться вечно.
+     * <p>Скелетон поднимается только когда кода на экране ещё нет: нарисованный
+     * код подменять крутилкой незачем, а после ошибки она крутилась бы вечно
      */
     private void setBusy(boolean busy) {
         progress.setVisibility(busy ? View.VISIBLE : View.GONE);

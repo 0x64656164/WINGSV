@@ -580,6 +580,15 @@
     <string name="awg_settings_interface_i3_title">I3</string>
     <string name="awg_settings_interface_i4_title">I4</string>
     <string name="awg_settings_interface_i5_title">I5</string>
+    <string name="awg_settings_interface_hpk_title">HeaderProtectionKey</string>
+    <string name="awg_settings_interface_cpa_title">ContentPaddingAddition</string>
+    <string name="awg_settings_interface_rekey_after_title">RekeyAfterTime</string>
+    <string name="awg_settings_interface_rekey_timeout_title">RekeyTimeout</string>
+    <string name="awg_settings_interface_reject_after_title">RejectAfterTime</string>
+    <string name="awg_settings_interface_keepalive_timeout_title">KeepaliveTimeout</string>
+    <string name="awg_settings_interface_max_handshakes_title">MaxHandshakeAttempts</string>
+    <string name="awg_settings_interface_random_trailers_title">RandomTrailers</string>
+    <string name="awg_settings_interface_disable_cookies_title">DisableCookies</string>
     <string name="awg_settings_peer_public_key_title">PublicKey</string>
     <string name="awg_settings_peer_preshared_key_title">PreSharedKey</string>
     <string name="awg_settings_peer_allowed_ips_title">AllowedIPs</string>
@@ -832,6 +841,9 @@
     <string name="xray_subscriptions_last_updated_label">Updated: %1$s</string>
     <string name="xray_subscriptions_title_hint">Name</string>
     <string name="xray_subscriptions_url_hint">Subscription URL</string>
+    <string name="xray_subscriptions_mirror_urls_hint">Backup URLs, one per line</string>
+    <string name="auto_search_setting_min_speed">Desired speed</string>
+    <string name="auto_search_setting_min_speed_summary">%1$d Mbit/s, 0 turns the check off</string>
     <string name="xray_subscriptions_url_required">Enter a subscription URL</string>
     <string name="xray_subscriptions_auto_update_per_subscription">Auto-refresh this subscription</string>
     <string name="xray_subscriptions_auto_update_disabled_label">Auto-refresh disabled</string>
@@ -863,8 +875,6 @@
     <string name="xray_settings_title">Xray settings</string>
     <string name="xray_settings_allow_lan_title">Allow connections from LAN</string>
     <string name="xray_settings_allow_lan_summary">Opens the local proxy to other devices on the local network</string>
-    <string name="xray_settings_allow_insecure_title">Allow insecure connections</string>
-    <string name="xray_settings_allow_insecure_summary">Allows insecure TLS where the profile supports it</string>
     <string name="xray_settings_ipv6_title">Enable IPv6</string>
     <string name="xray_settings_ipv6_summary">Use IPv6 in the Xray runtime</string>
     <string name="xray_settings_sniffing_title">Sniffing</string>
@@ -922,10 +932,11 @@
     <string name="warning_http_auth_disable">You are disabling HTTP proxy authentication. This reduces the security of your connection</string>
     <string name="warning_xray_tun_unknown_uid_bypass_disable">You are disabling the leak guard for unknown-UID packets. Apps that bind tun0 directly (e.g. via SO_BINDTODEVICE or explicit source IP) will be tunneled through the VPN even when they are in the bypass list, deanonymizing them.</string>
     <string name="warning_http_password_weak">The HTTP proxy password is too simple. This reduces the security of your connection</string>
-    <string name="warning_xray_allow_insecure_enable">You are disabling TLS certificate verification for Xray outbounds. This makes the connection vulnerable to MITM attacks</string>
     <string name="xray_routing_settings_title">Xray routing</string>
     <string name="xray_routing_geo_files_title">Geo files</string>
     <string name="xray_routing_geo_files_summary">These files are used for geoip/geosite routing rules</string>
+    <string name="xray_routing_geo_auto_update_title">Update automatically</string>
+    <string name="xray_routing_geo_auto_update_summary">Download the databases once a day</string>
     <string name="xray_routing_rules_title">Routing rules</string>
     <string name="xray_routing_rules_summary">Rule order matters: the first match wins before the generic proxy rule</string>
     <string name="xray_routing_rules_entry_summary">Add, reorder and validate routing rules</string>

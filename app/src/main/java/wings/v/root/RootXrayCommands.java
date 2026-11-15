@@ -13,23 +13,16 @@ import libXray.LibXray;
 import org.json.JSONObject;
 
 /**
- * Boots the gomobile-bound Xray runtime (shipped in the AAR as the standard
- * {@code libgojni.so}) inside an app_process forked under {@code su} so the
- * Xray runtime inherits root capabilities (notably CAP_NET_ADMIN, which is
- * required for setsockopt(IP_TRANSPARENT) on the TPROXY listener).
+ * Поднимает рантайм Xray в app_process под {@code su}: без рута не выдать
+ * CAP_NET_ADMIN, а без него не повесить IP_TRANSPARENT на TPROXY-слушатель.
  *
- * Lifecycle:
- *  1. Parent (WINGSV) writes config json to a private file, spawns this command
- *     via {@link wings.v.core.RootUtils#spawnRootHelperProcess(android.content.Context, String[])}.
- *  2. We inject the app's nativeLibraryDir into the system PathClassLoader's
- *     nativeLibraryDirectories so {@code System.loadLibrary("gojni")} (called
- *     from {@code go.Seq}'s static init the first time {@code LibXray} is
- *     touched) can resolve the lib - app_process started with a bare
- *     {@code CLASSPATH=base.apk} doesn't propagate the app's lib search path.
- *  3. {@code LibXray.runXrayFromJSON} kicks the runtime into goroutines and
- *     returns immediately. We park on a monitor until shutdown.
- *  4. Parent calls {@code Process.destroy()} (SIGTERM); the JVM shutdown hook
- *     calls {@code LibXray.stopXray()} for graceful drain.
+ * <p>Путь к нативным либам подсовываем руками: app_process стартует с голым
+ * {@code CLASSPATH=base.apk} и о каталоге приложения не знает, так что
+ * {@code System.loadLibrary("gojni")} без этого не найдёт ни хуя.
+ *
+ * <p>{@code runXray} раскидывает работу по горутинам и возвращается сразу,
+ * поэтому дальше просто спим на мониторе. Гасит нас родитель через SIGTERM,
+ * а хук на выходе успевает позвать {@code stopXray}
  */
 @SuppressWarnings(
     {
@@ -45,7 +38,7 @@ import org.json.JSONObject;
 final class RootXrayCommands {
 
     /** Версия контракта libXray. Библиотека отбивает запрос с чужой */
-    private static final int LIBXRAY_API_VERSION = 1;
+    private static final int LIBXRAY_API_VERSION = 3;
 
     private static final Object LOCK = new Object();
     private static final int API_SOCKET_WAIT_MS = 2000;
@@ -92,8 +85,8 @@ final class RootXrayCommands {
         LibXray.setAssetDir(resolvedDataDir);
         LibXray.setTunFd(0);
         JSONObject payload = new JSONObject();
-        payload.put("configJSON", configJson);
-        invoke("runXrayFromJson", payload);
+        payload.put("xrayJson", configJson);
+        invoke("runXray", payload);
 
         handApiSocketToApp(
             parseArg(args, "--api-socket"),

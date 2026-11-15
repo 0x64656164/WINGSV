@@ -9,11 +9,8 @@ import android.os.ResultReceiver;
 import android.text.TextUtils;
 import androidx.annotation.Nullable;
 import androidx.core.content.IntentCompat;
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.ServerSocket;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import wings.v.core.ByeDpiSettings;
@@ -54,7 +51,6 @@ public abstract class XrayRealDelayTestService extends Service {
     private static final String REQUEST_PROFILE_ADDRESS = "profile_address";
     private static final String REQUEST_PROFILE_PORT = "profile_port";
     private static final String REQUEST_PROFILE_PING_KEY = "profile_ping_key";
-    private static final String REQUEST_XRAY_ALLOW_INSECURE = "xray_allow_insecure";
     private static final String REQUEST_XRAY_REMOTE_DNS = "xray_remote_dns";
     private static final String REQUEST_XRAY_DIRECT_DNS = "xray_direct_dns";
     private static final String REQUEST_XRAY_IPV6 = "xray_ipv6";
@@ -120,7 +116,6 @@ public abstract class XrayRealDelayTestService extends Service {
         bundle.putInt(REQUEST_PROFILE_PORT, profile.port);
         bundle.putString(REQUEST_PROFILE_PING_KEY, pingKey);
         if (settings != null) {
-            bundle.putBoolean(REQUEST_XRAY_ALLOW_INSECURE, settings.allowInsecure);
             bundle.putString(REQUEST_XRAY_REMOTE_DNS, settings.remoteDns);
             bundle.putString(REQUEST_XRAY_DIRECT_DNS, settings.directDns);
             bundle.putBoolean(REQUEST_XRAY_IPV6, settings.ipv6);
@@ -175,7 +170,6 @@ public abstract class XrayRealDelayTestService extends Service {
     }
 
     private int runRealDelay(Bundle request) {
-        File configFile = null;
         try {
             XrayProfile profile = readProfile(request);
             int localProxyPort = findAvailableTcpPort();
@@ -190,7 +184,6 @@ public abstract class XrayRealDelayTestService extends Service {
                 byeDpiSettings,
                 useByeDpi
             );
-            configFile = writeConnectionTestConfig(configJson);
             String protectSocketName = RuntimeStateStore.readProtectSocketName();
             if (!TextUtils.isEmpty(protectSocketName)) {
                 XrayBridge.prepareRuntimeViaProtectSocket(protectSocketName, settings.remoteDns, settings.directDns);
@@ -199,10 +192,9 @@ public abstract class XrayRealDelayTestService extends Service {
             }
             long delayMs = XrayBridge.pingConfig(
                 getApplicationContext(),
-                configFile,
+                configJson,
                 REAL_DELAY_TIMEOUT_SECONDS,
-                REAL_DELAY_TEST_URL,
-                buildProbeSocksUrl(settings, localProxyPort)
+                REAL_DELAY_TEST_URL
             );
             if (delayMs <= 0L || delayMs > Integer.MAX_VALUE) {
                 return 0;
@@ -210,10 +202,6 @@ public abstract class XrayRealDelayTestService extends Service {
             return Math.max((int) delayMs, 1);
         } catch (Exception ignored) {
             return 0;
-        } finally {
-            if (configFile != null && configFile.exists()) {
-                configFile.delete();
-            }
         }
     }
 
@@ -231,7 +219,6 @@ public abstract class XrayRealDelayTestService extends Service {
 
     private XraySettings readSettings(Bundle request) {
         XraySettings settings = new XraySettings();
-        settings.allowInsecure = request.getBoolean(REQUEST_XRAY_ALLOW_INSECURE, false);
         settings.remoteDns = request.getString(REQUEST_XRAY_REMOTE_DNS, "");
         settings.directDns = request.getString(REQUEST_XRAY_DIRECT_DNS, "");
         settings.ipv6 = request.getBoolean(REQUEST_XRAY_IPV6, false);
@@ -247,33 +234,10 @@ public abstract class XrayRealDelayTestService extends Service {
         XraySettings settings = source.copy();
         settings.allowLan = false;
         settings.localProxyEnabled = true;
-        // Auth настройки (localProxyAuthEnabled/Username/Password) наследуем
-        // от source - чтобы транзиентный probe-сокет нельзя было использовать
-        // как открытый локальный SOCKS из чужого приложения.
+        // Логин с паролем наследуются от source: иначе временный probe-сокет становится
+        // открытым локальным SOCKS для любого приложения на телефоне
         settings.localProxyPort = localProxyPort;
         return settings;
-    }
-
-    private String buildProbeSocksUrl(XraySettings settings, int localProxyPort) {
-        if (
-            settings != null &&
-            settings.localProxyAuthEnabled &&
-            !TextUtils.isEmpty(settings.localProxyUsername) &&
-            !TextUtils.isEmpty(settings.localProxyPassword)
-        ) {
-            String user = urlEncode(settings.localProxyUsername);
-            String pass = urlEncode(settings.localProxyPassword);
-            return "socks://" + user + ":" + pass + "@127.0.0.1:" + localProxyPort;
-        }
-        return "socks://127.0.0.1:" + localProxyPort;
-    }
-
-    private static String urlEncode(String value) {
-        try {
-            return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8.name());
-        } catch (Exception ignored) {
-            return value;
-        }
     }
 
     private int findAvailableTcpPort() throws IOException {
@@ -281,17 +245,5 @@ public abstract class XrayRealDelayTestService extends Service {
             socket.setReuseAddress(true);
             return socket.getLocalPort();
         }
-    }
-
-    private File writeConnectionTestConfig(String configJson) throws IOException {
-        File dir = new File(getCacheDir(), "xray/profile-tests");
-        if (!dir.exists()) {
-            dir.mkdirs();
-        }
-        File file = new File(dir, "real-delay-" + System.nanoTime() + ".json");
-        try (FileOutputStream outputStream = new FileOutputStream(file, false)) {
-            outputStream.write(configJson.getBytes(StandardCharsets.UTF_8));
-        }
-        return file;
     }
 }

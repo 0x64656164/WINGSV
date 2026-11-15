@@ -35,7 +35,6 @@ public class XraySettingsFragment extends PreferenceFragmentCompat {
 
     static {
         RUNTIME_AFFECTING_KEYS.add(AppPrefs.KEY_XRAY_ALLOW_LAN);
-        RUNTIME_AFFECTING_KEYS.add(AppPrefs.KEY_XRAY_ALLOW_INSECURE);
         RUNTIME_AFFECTING_KEYS.add(AppPrefs.KEY_XRAY_LOCAL_PROXY_ENABLED);
         RUNTIME_AFFECTING_KEYS.add(AppPrefs.KEY_XRAY_LOCAL_PROXY_AUTH_ENABLED);
         RUNTIME_AFFECTING_KEYS.add(AppPrefs.KEY_XRAY_LOCAL_PROXY_USERNAME);
@@ -84,7 +83,6 @@ public class XraySettingsFragment extends PreferenceFragmentCompat {
         getPreferenceManager().setPreferenceDataStore(AppPrefs.mainPreferenceDataStore(requireContext()));
         setPreferencesFromResource(R.xml.xray_preferences, rootKey);
         bindSwitch(AppPrefs.KEY_XRAY_ALLOW_LAN);
-        bindSwitch(AppPrefs.KEY_XRAY_ALLOW_INSECURE);
         bindSwitch(AppPrefs.KEY_XRAY_LOCAL_PROXY_ENABLED);
         bindSwitch(AppPrefs.KEY_XRAY_LOCAL_PROXY_AUTH_ENABLED);
         bindSwitch(AppPrefs.KEY_XRAY_HTTP_PROXY_ENABLED);
@@ -122,36 +120,36 @@ public class XraySettingsFragment extends PreferenceFragmentCompat {
     }
 
     private void applyTunUidPrefVisibility() {
-        // Both settings only act inside the gVisor TUN inbound. In TPROXY mode the
-        // TUN is not built and UID matching is a synchronous kernel owner-match, so
-        // neither applies - hide them there. The UID lookup timeout drives the
-        // /proc/net retry window, which needs root to read /proc, so it stays root-
-        // only. Unknown UID Bypass is a user choice in both root and no-root TUN
-        // (whether an unresolved UID leaks direct after the timeout).
+        // Both settings only act inside the TUN inbound: TPROXY builds no TUN and
+        // matches UIDs with a synchronous kernel owner-match, so hide them there.
+        // The UID lookup timeout drives the /proc/net retry window, and reading
+        // /proc needs root, so it stays root-only. Unknown UID Bypass is a choice in
+        // both root and no-root TUN - whether an unresolved UID leaks direct once
+        // the timeout is up
         boolean rootMode = AppPrefs.isRootModeEnabled(requireContext());
         boolean tproxyActive =
             rootMode &&
             AppPrefs.isXrayTproxyModeEnabled(requireContext()) &&
             RootUtils.isXrayTproxySupported(requireContext(), false);
-        // The gVisor TUN UID filter is built ONLY for the X (divert) modes - plain
-        // Bypass/Whitelist filter at the VpnService framework layer (non-root) or via
-        // iptables owner-match (root), never the gVisor filter. So its unknown-UID
-        // router/policy and the /proc lookup timeout act only in XBYPASS/XWHITELIST;
-        // hide them everywhere else (plain modes on root and non-root, and TPROXY).
-        // The timeout additionally needs root (it drives the root-only /proc retry).
+        // The TUN UID filter is built ONLY for the X (divert) modes: plain
+        // Bypass/Whitelist filter in the VpnService framework layer (non-root) or
+        // through an iptables owner-match (root), never in the TUN filter. So the
+        // unknown-UID router/policy and the /proc lookup timeout act in
+        // XBYPASS/XWHITELIST only - hide them in the plain modes, root or not, and
+        // in TPROXY. The timeout also needs root for the /proc retry
         wings.v.core.AppRoutingMode appMode = AppPrefs.getAppRoutingMode(requireContext());
-        boolean gvisorUidFilterActive = !tproxyActive && appMode.isGvisorDivert();
+        boolean tunUidFilterActive = !tproxyActive && appMode.isTunDivert();
         androidx.preference.Preference timeoutPref = findPreference(AppPrefs.KEY_XRAY_TUN_UID_LOOKUP_TIMEOUT_MS);
         if (timeoutPref != null) {
-            timeoutPref.setVisible(rootMode && gvisorUidFilterActive);
+            timeoutPref.setVisible(rootMode && tunUidFilterActive);
         }
         androidx.preference.Preference unknownRouterPref = findPreference(AppPrefs.KEY_XRAY_TUN_UNKNOWN_UID_ROUTER);
         if (unknownRouterPref != null) {
-            unknownRouterPref.setVisible(gvisorUidFilterActive);
+            unknownRouterPref.setVisible(tunUidFilterActive);
         }
         androidx.preference.Preference unknownPolicyPref = findPreference(AppPrefs.KEY_XRAY_TUN_UNKNOWN_UID_POLICY);
         if (unknownPolicyPref != null) {
-            unknownPolicyPref.setVisible(gvisorUidFilterActive);
+            unknownPolicyPref.setVisible(tunUidFilterActive);
         }
     }
 
@@ -170,17 +168,6 @@ public class XraySettingsFragment extends PreferenceFragmentCompat {
                         requestRuntimeReconnectIfActive(key);
                     },
                     authDisableWarning
-                );
-                return false;
-            }
-            String enableWarning = warningForEnable(key, preference, newValue);
-            if (enableWarning != null) {
-                showWarningBeforeApplying(
-                    () -> {
-                        AppPrefs.defaultSharedPreferences(requireContext()).edit().putBoolean(key, true).commit();
-                        requestRuntimeReconnectIfActive(key);
-                    },
-                    enableWarning
                 );
                 return false;
             }
@@ -260,7 +247,6 @@ public class XraySettingsFragment extends PreferenceFragmentCompat {
         syncEditText(AppPrefs.KEY_XRAY_HTTP_PROXY_PASSWORD, settings.httpProxyPassword);
         syncEditText(AppPrefs.KEY_XRAY_HTTP_PROXY_LISTEN_ADDRESS, settings.httpProxyListenAddress);
         syncSwitch(AppPrefs.KEY_XRAY_ALLOW_LAN, settings.allowLan);
-        syncSwitch(AppPrefs.KEY_XRAY_ALLOW_INSECURE, settings.allowInsecure);
         syncSwitch(AppPrefs.KEY_XRAY_LOCAL_PROXY_ENABLED, settings.localProxyEnabled);
         syncSwitch(AppPrefs.KEY_XRAY_LOCAL_PROXY_AUTH_ENABLED, settings.localProxyAuthEnabled);
         syncSwitch(AppPrefs.KEY_XRAY_HTTP_PROXY_ENABLED, settings.httpProxyEnabled);
@@ -335,10 +321,10 @@ public class XraySettingsFragment extends PreferenceFragmentCompat {
     private void refreshLocalProxyVisibility(XraySettings settings) {
         boolean proxyEnabled = settings.localProxyEnabled;
         boolean authEnabled = proxyEnabled && settings.localProxyAuthEnabled;
-        // Listen address is overridden by the LAN switch (resolveSocksListenAddress /
-        // resolveHttpListenAddress fall back to 0.0.0.0 when allowLan == true), so
-        // disable the explicit field while the switch is on to avoid the silent
-        // conflict where the user types 127.0.0.1 but the proxy still binds 0.0.0.0.
+        // The LAN switch wins over the listen address: with allowLan == true,
+        // resolveSocksListenAddress / resolveHttpListenAddress fall back to 0.0.0.0.
+        // So the field goes grey while the switch is on, otherwise you type
+        // 127.0.0.1 and the proxy still binds 0.0.0.0
         boolean listenEditable = !settings.allowLan;
         setPreferenceEnabled(AppPrefs.KEY_XRAY_LOCAL_PROXY_PORT, proxyEnabled);
         setPreferenceEnabled(AppPrefs.KEY_XRAY_LOCAL_PROXY_LISTEN_ADDRESS, proxyEnabled && listenEditable);
@@ -460,11 +446,11 @@ public class XraySettingsFragment extends PreferenceFragmentCompat {
             return getString(R.string.warning_http_auth_disable);
         }
         if (TextUtils.equals(key, AppPrefs.KEY_XRAY_TUN_UNKNOWN_UID_ROUTER)) {
-            // Disabling the router lets unresolved-UID connections fall straight
-            // into the tunnel, reopening the SO_BINDTODEVICE escape path. With
-            // root the iptables OUTPUT filter (applyFilterOnly block-2) already
-            // blocks tunneled UIDs on the underlying network, so the warning is
-            // not relevant there.
+            // With the router off, unresolved-UID connections drop straight into
+            // the tunnel and the SO_BINDTODEVICE escape is open again. On root the
+            // iptables OUTPUT filter (applyFilterOnly block-2) already blocks
+            // tunneled UIDs on the underlying network, so the warning is pointless
+            // there
             if (AppPrefs.isRootModeEnabled(requireContext())) {
                 return null;
             }
@@ -473,20 +459,10 @@ public class XraySettingsFragment extends PreferenceFragmentCompat {
         return null;
     }
 
-    private String warningForEnable(String key, SwitchPreferenceCompat preference, Object newValue) {
-        if (preference.isChecked() || !Boolean.TRUE.equals(newValue)) {
-            return null;
-        }
-        if (TextUtils.equals(key, AppPrefs.KEY_XRAY_ALLOW_INSECURE)) {
-            return getString(R.string.warning_xray_allow_insecure_enable);
-        }
-        return null;
-    }
-
     private String warningForWeakPassword(String key, Object newValue) {
-        // An empty value is the user asking for auto-generation; SocksAuthCredentials.ensure
-        // mints a fresh random token on next read. Don't gate that path behind a "too simple"
-        // warning, it would block the regeneration UX.
+        // An empty value means auto-generation: SocksAuthCredentials.ensure mints a
+        // fresh random token on the next read. A "too simple" warning here would only
+        // stand in the way of that
         String candidate = newValue == null ? "" : String.valueOf(newValue);
         if (TextUtils.isEmpty(candidate)) {
             return null;

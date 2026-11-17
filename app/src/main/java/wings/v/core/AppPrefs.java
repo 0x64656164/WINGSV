@@ -1625,7 +1625,6 @@ public final class AppPrefs {
         settings.vkTurnWrapCipher = normalizeWrapCipher(prefs.getString(KEY_VK_TURN_WRAP_CIPHER, "srtp-aes-gcm"));
         settings.vkTurnWrapKeyHex = trim(prefs.getString(KEY_VK_TURN_WRAP_KEY_HEX, ""));
         settings.vkTurnWrapSendKey = prefs.getBoolean(KEY_VK_TURN_WRAP_SEND_KEY, true);
-        settings.vkTurnBrowserFingerprint = getVkTurnBrowserFingerprint(context);
         settings.turnSessionMode = normalizeTurnSessionMode(
             prefs.getString(KEY_TURN_SESSION_MODE, TURN_SESSION_MODE_MU)
         );

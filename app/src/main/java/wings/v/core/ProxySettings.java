@@ -50,7 +50,6 @@ public class ProxySettings {
     // стандартный: порт может быть занят кем угодно, и тогда ядро не поднимется
     public int redirectPort;
     public String vkTurnWrapMode = "preferred";
-    public String vkTurnBrowserFingerprint = "safari";
     /** WRAP SRTP-mimicry AEAD: "srtp-aes-gcm" (default) or "srtp-chacha20-poly1305". */
     public String vkTurnWrapCipher = "srtp-aes-gcm";
     /** Hex-encoded 32-byte WRAP shared key (64 chars). Empty = auto-generate. */

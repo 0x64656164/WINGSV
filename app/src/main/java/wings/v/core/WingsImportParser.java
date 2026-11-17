@@ -2591,10 +2591,6 @@ public final class WingsImportParser {
         if (includeDefaults || !"preferred".equals(wrapMode)) {
             builder.setWrapMode(wrapModeFromPref(wrapMode));
         }
-        String browserFingerprint = AppPrefs.normalizeVkTurnBrowserFingerprint(settings.vkTurnBrowserFingerprint);
-        if (includeDefaults || !AppPrefs.VK_TURN_BROWSER_FP_SAFARI.equals(browserFingerprint)) {
-            builder.setBrowserFingerprint(browserFingerprint);
-        }
         String wrapCipher = AppPrefs.normalizeWrapCipher(settings.vkTurnWrapCipher);
         if (includeDefaults || !"srtp-aes-gcm".equals(wrapCipher)) {
             builder.addWrapCiphers(wrapCipherFromPref(wrapCipher));
@@ -2611,10 +2607,14 @@ public final class WingsImportParser {
                     : WingsvProto.WrapKeyDelivery.WRAP_KEY_DELIVERY_OFF
             );
         }
-        // Панель читает это поле обратно из отчёта, поэтому оно обязано уезжать
-        // в снимок - иначе выбор отпечатка виден только на устройстве
+        // Панель читает это поле обратно из снимка, поэтому нестандартный выбор
+        // обязан уезжать даже когда он совпадает с дефолтом. "auto" остаётся
+        // отсутствующим, если только не сериализуются все значения по умолчанию
         String browserFingerprint = AppPrefs.normalizeVkTurnBrowserFingerprint(settings.vkTurnBrowserFingerprint);
-        if (!TextUtils.isEmpty(browserFingerprint) && !AppPrefs.VK_TURN_BROWSER_FP_AUTO.equals(browserFingerprint)) {
+        if (
+            includeDefaults ||
+            (!TextUtils.isEmpty(browserFingerprint) && !AppPrefs.VK_TURN_BROWSER_FP_AUTO.equals(browserFingerprint))
+        ) {
             builder.setBrowserFingerprint(browserFingerprint);
         }
         return builder.build();
@@ -4184,7 +4184,6 @@ public final class WingsImportParser {
         public String vkTurnWrapCipher;
         public String vkTurnWrapKeyHex;
         public Boolean vkTurnWrapSendKey;
-        public String vkTurnBrowserFingerprint;
         public ProxyRuntimeMode xrayRuntimeMode;
         public String turnSessionMode;
         public String localEndpoint;

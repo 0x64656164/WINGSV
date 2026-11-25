@@ -127,6 +127,12 @@ public final class VkTurnProfileStore {
     }
 
     public static boolean deleteProfile(Context context, String profileId) {
+        return deleteProfile(context, profileId, true);
+    }
+
+    // A transport cascade deletes dependents first; recreating one here would point
+    // it back at the transport that is about to go and block the cascade.
+    static boolean deleteProfile(Context context, String profileId, boolean recreateManaged) {
         String trimmedId = ProfileStoreSupport.trim(profileId);
         if (TextUtils.isEmpty(trimmedId)) {
             return false;
@@ -143,13 +149,35 @@ public final class VkTurnProfileStore {
         if (!removed) {
             return false;
         }
+        boolean managedProvisioning = recreateManaged && profiles.isEmpty() && hasManagedProvisioningIdentity(context);
+        String provisionClientId = "";
+        String provisionToken = "";
+        if (managedProvisioning) {
+            SharedPreferences prefs = ProfileStoreSupport.prefs(context);
+            provisionClientId = ProfileStoreSupport.trim(prefs.getString(AppPrefs.KEY_VK_TURN_PROVISION_CLIENT_ID, ""));
+            provisionToken = ProfileStoreSupport.trim(prefs.getString(AppPrefs.KEY_VK_TURN_PROVISION_TOKEN, ""));
+        }
         setProfiles(context, profiles);
         ProfileStoreSupport.setFavorite(context, AppPrefs.KEY_VK_TURN_FAVORITE_PROFILE_IDS, trimmedId, false);
         if (TextUtils.equals(getActiveProfileId(context), trimmedId)) {
             setActiveProfileId(context, "");
             ensureActivePresent(context);
         }
+        if (managedProvisioning) {
+            // Auto-create is still on in the panel and its provisioning identity is
+            // in the flat keys. Rebuild a managed profile from them so deleting the
+            // last profile on the device does not leave it with no VK TURN profile.
+            importManagedFromFlatPrefs(context, provisionClientId, provisionToken);
+        }
         return true;
+    }
+
+    private static boolean hasManagedProvisioningIdentity(Context context) {
+        SharedPreferences prefs = ProfileStoreSupport.prefs(context);
+        return (
+            prefs.getBoolean(AppPrefs.KEY_VK_TURN_WG_PROVISIONED, false) &&
+            !TextUtils.isEmpty(ProfileStoreSupport.trim(prefs.getString(AppPrefs.KEY_VK_TURN_PROVISION_TOKEN, "")))
+        );
     }
 
     /**
@@ -283,9 +311,17 @@ public final class VkTurnProfileStore {
         // Threads, creds group size, the VK-ID auth mode, the session mode and the
         // browser fingerprint are device-global, NOT per-profile: project them here
         // and switching a profile resets what the user set globally
+        String cachedEndpoint = ProfileStoreSupport.trim(
+            ProfileStoreSupport.prefs(context).getString(AppPrefs.KEY_ENDPOINT, "")
+        );
+        String vkTurnEndpoint = ProfileStoreSupport.trim(profile.vkTurnEndpoint);
+        // A profile without a VK TURN address must not wipe the flat key: the runtime
+        // validates KEY_ENDPOINT before it starts, and an empty value makes every
+        // switch back into VK TURN fail with "Endpoint not filled".
+        String projectedEndpoint = TextUtils.isEmpty(vkTurnEndpoint) ? cachedEndpoint : vkTurnEndpoint;
         ProfileStoreSupport.prefs(context)
             .edit()
-            .putString(AppPrefs.KEY_ENDPOINT, ProfileStoreSupport.trim(profile.vkTurnEndpoint))
+            .putString(AppPrefs.KEY_ENDPOINT, projectedEndpoint)
             .putBoolean(AppPrefs.KEY_USE_UDP, profile.useUdp)
             .putBoolean(AppPrefs.KEY_NO_OBFUSCATION, profile.noObfuscation)
             .putBoolean(AppPrefs.KEY_MANUAL_CAPTCHA, profile.manualCaptcha)
@@ -513,6 +549,28 @@ public final class VkTurnProfileStore {
             ? synthesizeTitle(context, endpoint)
             : title;
         VkTurnProfile profile = readFlatProfile(context, resolvedTitle, transportKind, transportProfileId);
+        VkTurnProfile stored = addImportedProfile(context, profile);
+        if (stored == null) {
+            return null;
+        }
+        setActiveProfileId(context, stored.id);
+        applyActiveToPrefs(context);
+        return stored;
+    }
+
+    // A managed profile gets its transport on connect, so the rebuilt copy carries
+    // the provisioning identity and has no transport reference. Importing the flat
+    // transport here would create an orphan profile and mark the wrong composition.
+    static VkTurnProfile importManagedFromFlatPrefs(Context context, String provisionClientId, String provisionToken) {
+        SharedPreferences prefs = ProfileStoreSupport.prefs(context);
+        String endpoint = ProfileStoreSupport.trim(prefs.getString(AppPrefs.KEY_ENDPOINT, ""));
+        if (TextUtils.isEmpty(endpoint)) {
+            return null;
+        }
+        boolean awg = AppPrefs.getVkTurnTunnelMode(context) == TunnelMode.AMNEZIAWG;
+        String transportKind = awg ? VkTurnProfile.TRANSPORT_KIND_AWG : VkTurnProfile.TRANSPORT_KIND_WG;
+        VkTurnProfile profile = readFlatProfile(context, synthesizeTitle(context, endpoint), transportKind, "");
+        profile = profile.withManaged(provisionClientId, provisionToken);
         VkTurnProfile stored = addImportedProfile(context, profile);
         if (stored == null) {
             return null;

@@ -159,7 +159,7 @@ public final class AmneziaProfileStore {
             VkTurnProfile.TRANSPORT_KIND_AWG,
             trimmedId
         )) {
-            if (dependent != null && VkTurnProfileStore.deleteProfile(context, dependent.id)) {
+            if (dependent != null && VkTurnProfileStore.deleteProfile(context, dependent.id, false)) {
                 removedDependents = true;
             }
         }

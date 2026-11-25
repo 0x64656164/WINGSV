@@ -164,7 +164,7 @@ public final class WireGuardProfileStore {
             VkTurnProfile.TRANSPORT_KIND_WG,
             trimmedId
         )) {
-            if (dependent != null && VkTurnProfileStore.deleteProfile(context, dependent.id)) {
+            if (dependent != null && VkTurnProfileStore.deleteProfile(context, dependent.id, false)) {
                 removedDependents = true;
             }
         }

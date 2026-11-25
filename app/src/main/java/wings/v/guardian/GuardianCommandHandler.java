@@ -194,9 +194,9 @@ public final class GuardianCommandHandler {
 
         try {
             wings.v.core.WingsImportParser.ImportedConfig imported = wings.v.core.WingsImportParser.parseProtoConfig(
-                cfg
+                cfg,
+                true
             );
-            imported.panelPush = true;
             // Credentials go, sync_mode/interval stay: the panel drives those and has to
             // see them take effect
             imported.guardianWsUrl = null;

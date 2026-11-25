@@ -1751,13 +1751,16 @@ public final class WingsImportParser {
 
     private static void parseAppPreferences(WingsvProto.AppPreferences ap, ImportedConfig importedConfig) {
         importedConfig.hasAppPreferences = true;
-        if (ap.getThemeMode() != WingsvProto.ThemeMode.THEME_MODE_UNSPECIFIED) {
+        // A full panel push owns these too: UNSPECIFIED means the panel left the
+        // setting at its default, not that the device should keep its own value.
+        boolean panelPush = importedConfig.panelPush;
+        if (ap.getThemeMode() != WingsvProto.ThemeMode.THEME_MODE_UNSPECIFIED || panelPush) {
             importedConfig.themeMode = fromProtoThemeMode(ap.getThemeMode());
         }
         if (ap.hasAutoStartOnBoot()) {
             importedConfig.autoStartOnBoot = ap.getAutoStartOnBoot();
         }
-        if (ap.getDnsMode() != WingsvProto.DnsMode.DNS_MODE_UNSPECIFIED) {
+        if (ap.getDnsMode() != WingsvProto.DnsMode.DNS_MODE_UNSPECIFIED || panelPush) {
             importedConfig.dnsMode = fromProtoDnsMode(ap.getDnsMode());
         }
     }
@@ -2722,7 +2725,12 @@ public final class WingsImportParser {
     }
 
     public static ImportedConfig parseProtoConfig(WingsvProto.Config config) throws Exception {
+        return parseProtoConfig(config, false);
+    }
+
+    public static ImportedConfig parseProtoConfig(WingsvProto.Config config, boolean fromPanel) throws Exception {
         ImportedConfig importedConfig = new ImportedConfig();
+        importedConfig.panelPush = fromPanel;
         if (config.getBackend() != WingsvProto.BackendType.BACKEND_TYPE_UNSPECIFIED) {
             BackendType resolvedBackend = BackendType.fromProto(config.getBackend());
             // VK TURN rides as BACKEND_TYPE_VK_TURN with the WG/AWG choice sitting in
@@ -2960,6 +2968,7 @@ public final class WingsImportParser {
 
     private static void parseTurn(WingsvProto.Turn turn, ImportedConfig importedConfig) {
         importedConfig.hasTurnSettings = true;
+        boolean panelPush = importedConfig.panelPush;
         importedConfig.turnMergeOnly = turn.hasMergeOnly() && turn.getMergeOnly();
         if (!TextUtils.isEmpty(value(turn.getTitle()))) {
             importedConfig.importedVkTurnTitle = value(turn.getTitle());
@@ -2991,17 +3000,17 @@ public final class WingsImportParser {
         if (turn.hasNoObfuscation()) {
             importedConfig.noObfuscation = turn.getNoObfuscation();
         }
-        if (turn.getSessionMode() != WingsvProto.TurnSessionMode.TURN_SESSION_MODE_UNSPECIFIED) {
+        if (turn.getSessionMode() != WingsvProto.TurnSessionMode.TURN_SESSION_MODE_UNSPECIFIED || panelPush) {
             importedConfig.turnSessionMode = fromProtoSessionMode(turn.getSessionMode());
         }
         importedConfig.localEndpoint = turn.hasLocalEndpoint() ? formatEndpoint(turn.getLocalEndpoint()) : null;
         importedConfig.turnHost = turn.hasHost() ? value(turn.getHost()) : "";
-        importedConfig.turnPort = turn.hasPort() ? String.valueOf(turn.getPort()) : null;
+        importedConfig.turnPort = turn.hasPort() ? String.valueOf(turn.getPort()) : panelPush ? "" : null;
         if (turn.hasManualCaptcha()) {
             importedConfig.manualCaptcha = turn.getManualCaptcha();
         }
         String solver = value(turn.getCaptchaAutoSolver());
-        if (!TextUtils.isEmpty(solver)) {
+        if (!TextUtils.isEmpty(solver) || panelPush) {
             importedConfig.captchaAutoSolver = solver;
         }
         if (turn.hasRestartOnNetworkChange()) {
@@ -3012,11 +3021,11 @@ public final class WingsImportParser {
         if (turn.hasBrowserFingerprint()) {
             importedConfig.vkTurnBrowserFingerprint = value(turn.getBrowserFingerprint());
         }
-        if (turn.getRuntimeMode() != WingsvProto.ProxyRuntimeMode.PROXY_RUNTIME_MODE_UNSPECIFIED) {
+        if (turn.getRuntimeMode() != WingsvProto.ProxyRuntimeMode.PROXY_RUNTIME_MODE_UNSPECIFIED || panelPush) {
             importedConfig.vkTurnRuntimeMode = fromProtoRuntimeMode(turn.getRuntimeMode());
         }
         importedConfig.vkTurnTunnelMode = wings.v.core.TunnelMode.fromProto(turn.getTunnelMode());
-        if (turn.getUserDnsCount() > 0) {
+        if (turn.getUserDnsCount() > 0 || panelPush) {
             StringBuilder joined = new StringBuilder();
             for (int i = 0; i < turn.getUserDnsCount(); i++) {
                 String entry = turn.getUserDns(i);
@@ -3030,7 +3039,7 @@ public final class WingsImportParser {
             }
             importedConfig.vkTurnUserDns = joined.toString();
         }
-        if (turn.getWrapMode() != WingsvProto.WrapMode.WRAP_MODE_UNSPECIFIED) {
+        if (turn.getWrapMode() != WingsvProto.WrapMode.WRAP_MODE_UNSPECIFIED || panelPush) {
             importedConfig.vkTurnWrapMode = wrapModeToPref(turn.getWrapMode());
         }
         if (!turn.getBrowserFingerprint().isEmpty()) {
@@ -3038,15 +3047,18 @@ public final class WingsImportParser {
                 turn.getBrowserFingerprint()
             );
         }
-        if (turn.getWrapCiphersCount() > 0) {
-            importedConfig.vkTurnWrapCipher = wrapCipherToPref(turn.getWrapCiphers(0));
+        if (turn.getWrapCiphersCount() > 0 || panelPush) {
+            importedConfig.vkTurnWrapCipher =
+                turn.getWrapCiphersCount() > 0
+                    ? wrapCipherToPref(turn.getWrapCiphers(0))
+                    : wrapCipherToPref(WingsvProto.WrapCipher.WRAP_CIPHER_UNSPECIFIED);
         }
         if (!turn.getWrapKey().isEmpty()) {
             importedConfig.vkTurnWrapKeyHex = bytesToHex(turn.getWrapKey().toByteArray());
         }
-        if (turn.getWrapKeyDelivery() != WingsvProto.WrapKeyDelivery.WRAP_KEY_DELIVERY_UNSPECIFIED) {
+        if (turn.getWrapKeyDelivery() != WingsvProto.WrapKeyDelivery.WRAP_KEY_DELIVERY_UNSPECIFIED || panelPush) {
             importedConfig.vkTurnWrapSendKey =
-                turn.getWrapKeyDelivery() == WingsvProto.WrapKeyDelivery.WRAP_KEY_DELIVERY_IN_BAND;
+                turn.getWrapKeyDelivery() != WingsvProto.WrapKeyDelivery.WRAP_KEY_DELIVERY_OFF;
         }
     }
 
@@ -3246,6 +3258,9 @@ public final class WingsImportParser {
         } else if (appRouting.hasBypass()) {
             mode = appRouting.getBypass() ? AppRoutingMode.XBYPASS : AppRoutingMode.WHITELIST;
         }
+        if (mode == null && importedConfig.panelPush) {
+            mode = AppRoutingMode.OFF;
+        }
         importedConfig.appRoutingMode = mode;
 
         List<String> bypassPackages = new ArrayList<>();
@@ -3262,7 +3277,8 @@ public final class WingsImportParser {
         }
 
         boolean hasNewLists = !bypassPackages.isEmpty() || !whitelistPackages.isEmpty();
-        if (hasNewLists) {
+        if (hasNewLists || importedConfig.panelPush) {
+            // Empty lists from the panel are a deliberate reset, not silence.
             importedConfig.appRoutingBypassPackages = bypassPackages;
             importedConfig.appRoutingWhitelistPackages = whitelistPackages;
             return;
@@ -3716,7 +3732,9 @@ public final class WingsImportParser {
                 importedConfig.awgProfiles.add(fromProtoAwgProfile(profile));
             }
         }
-        if (config.hasTurn() && config.getTurn().getProfilesCount() > 0) {
+        // A panel push with an empty profiles list is a deletion, not silence: without
+        // this flag the client would keep the profile the admin just removed.
+        if (config.hasTurn() && (importedConfig.panelPush || config.getTurn().getProfilesCount() > 0)) {
             importedConfig.hasTurnProfiles = true;
             importedConfig.activeTurnProfileId = value(config.getTurn().getActiveProfileId());
             for (WingsvProto.TurnProfile profile : config.getTurn().getProfilesList()) {

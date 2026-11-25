@@ -1810,7 +1810,14 @@ public final class AppPrefs {
             // identity, which leaves it without a WG key and breaks the settings
             // export. Fold the flat keys into the active profile instead; only a
             // client that has no profile yet falls through to the bootstrap import.
-            if (importedConfig.panelPush && VkTurnProfileStore.updateActiveFromFlatPrefs(context) != null) {
+            // A panel push that carries a profiles list owns the whole library, even
+            // when that list is empty (the admin deleted the last profile). Never
+            // synthesize a device-local copy in that case - it would survive the
+            // deletion and hijack the active id again.
+            if (
+                importedConfig.panelPush &&
+                (importedConfig.hasTurnProfiles || VkTurnProfileStore.updateActiveFromFlatPrefs(context) != null)
+            ) {
                 return;
             }
             // VK TURN: the transport (WG/AWG) sub-config is imported as its own
@@ -1953,10 +1960,14 @@ public final class AppPrefs {
         editor.putString(KEY_VK_LINKS_JSON, encodeVkLinks(vkLinkPool));
         if (!TextUtils.isEmpty(importedLink)) {
             editor.putString(KEY_VK_LINK, importedLink);
+        } else if (importedConfig.panelPush) {
+            // A full panel config with an empty link clears it; a share link with
+            // no link must keep whatever the device already had.
+            editor.putString(KEY_VK_LINK, "");
         } else if (!vkLinkPool.isEmpty()) {
             editor.putString(KEY_VK_LINK, vkLinkPool.get(0));
         }
-        if (!TextUtils.isEmpty(trim(importedConfig.linkSecondary))) {
+        if (!TextUtils.isEmpty(trim(importedConfig.linkSecondary)) || importedConfig.panelPush) {
             editor.putString(KEY_VK_LINK_SECONDARY, trim(importedConfig.linkSecondary));
         }
         if (importedConfig.credsGroupSize != null && importedConfig.credsGroupSize > 0) {
@@ -1979,7 +1990,7 @@ public final class AppPrefs {
         if (importedConfig.manualCaptcha != null) {
             editor.putBoolean(KEY_MANUAL_CAPTCHA, importedConfig.manualCaptcha);
         }
-        if (!TextUtils.isEmpty(importedConfig.captchaAutoSolver)) {
+        if (importedConfig.captchaAutoSolver != null) {
             editor.putString(KEY_CAPTCHA_AUTO_SOLVER, normalizeCaptchaAutoSolver(importedConfig.captchaAutoSolver));
         }
         if (importedConfig.vkTurnRestartOnNetworkChange != null) {
@@ -2009,12 +2020,6 @@ public final class AppPrefs {
         if (importedConfig.vkTurnWrapSendKey != null) {
             editor.putBoolean(KEY_VK_TURN_WRAP_SEND_KEY, importedConfig.vkTurnWrapSendKey);
         }
-        if (!TextUtils.isEmpty(importedConfig.vkTurnBrowserFingerprint)) {
-            editor.putString(
-                KEY_VK_TURN_BROWSER_FINGERPRINT,
-                normalizeVkTurnBrowserFingerprint(importedConfig.vkTurnBrowserFingerprint)
-            );
-        }
         if (importedConfig.turnSessionMode != null) {
             editor.putString(KEY_TURN_SESSION_MODE, normalizeTurnSessionMode(importedConfig.turnSessionMode));
         }
@@ -2022,10 +2027,10 @@ public final class AppPrefs {
             String localEndpoint = trim(importedConfig.localEndpoint);
             editor.putString(KEY_LOCAL_ENDPOINT, TextUtils.isEmpty(localEndpoint) ? "127.0.0.1:9000" : localEndpoint);
         }
-        // host - optional: отсутствие поля читаем как "панель не присылала".
-        // Пустое значение не очищаем, оставляем устройство на своём хосте
+        // For a full panel push an empty host is a reset; a share link without
+        // the field keeps the device's current override.
         String importedTurnHost = trim(importedConfig.turnHost);
-        if (!TextUtils.isEmpty(importedTurnHost)) {
+        if (!TextUtils.isEmpty(importedTurnHost) || importedConfig.panelPush) {
             editor.putString(KEY_TURN_HOST, importedTurnHost);
         }
         if (importedConfig.turnPort != null) {
@@ -2155,7 +2160,10 @@ public final class AppPrefs {
                     active = addedId;
                 }
             }
-            if (!TextUtils.isEmpty(active)) {
+            if (importedConfig.hasAllSettings || importedConfig.panelPush || !TextUtils.isEmpty(active)) {
+                // An empty list from the panel means the last profile was removed:
+                // clear the dangling id as well, otherwise getActiveProfile keeps
+                // pointing at a profile that no longer exists.
                 VkTurnProfileStore.setActiveProfileId(context, active);
             }
             VkTurnProfileStore.applyActiveToPrefs(context);

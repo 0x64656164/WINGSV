@@ -8,6 +8,7 @@ import androidx.core.content.ContextCompat;
 import java.util.Locale;
 import wings.v.core.AppPrefs;
 import wings.v.core.BackendType;
+import wings.v.core.VkTurnProfileStore;
 import wings.v.core.XrayStore;
 import wings.v.qs.QuickSettingsTiles;
 import wings.v.service.ProxyTunnelService;
@@ -103,6 +104,14 @@ public final class ExternalActions {
             // backend, so the auto-restore target is no longer cleared here: a
             // relay-to-relay change must keep the pre-TURN backend it will return to.
             XrayStore.setBackendType(appContext, targetBackend);
+            if (targetBackend.usesTurnProxy()) {
+                // Returning to VK TURN must rebuild the flat keys from the active
+                // profile. Another backend can leave an empty endpoint in KEY_ENDPOINT,
+                // which the runtime rejects before the tunnel starts. Re-selecting the
+                // already active backend must not overwrite unsynced settings-screen
+                // edits with the stored profile.
+                VkTurnProfileStore.applyActiveToPrefs(appContext);
+            }
         }
         if (changed && reconnectIfActive && ProxyTunnelService.isActive()) {
             if (transientLaunch) {
